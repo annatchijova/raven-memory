@@ -1,8 +1,8 @@
-# 🦅 raven-memory
+# raven-memory
+
 ### Adaptive Memory Field for Agentic Systems
 
-🐦‍⬛ **[raven-memory.html](https://annatchijova.github.io/vigia/raven-memory.html)** 🐦‍⬛
-**Track 1: MemoryAgent · Qwen Cloud Hackathon**
+**[Live demo & architecture](https://annatchijova.github.io/vigia/raven-memory.html)** | **Track 1: MemoryAgent · Qwen Cloud Hackathon**
 
 > *"The agent doesn't* find *memories — it* resonates *with them."*
 
@@ -53,6 +53,7 @@ shallow — as the last.
 | **Recency bonus** | 24-hour half-life additive term rewards recently-accessed memories. |
 | **REINFORCED immunity** | A validated truth cannot be silenced by an uninvalidated claim during BFS. |
 | **Stylometric fingerprinting** | Detects if a memory's writing style doesn't match the registered author; auto-degrades to FORGOTTEN. |
+| **Spectral field (SVD)** | Extracts eigenmode structure from all active embeddings — resonance and coherence as epistemological metadata. |
 | **Audit hash-chain** | Every recall is cryptographically chained — tamper-proof provenance. |
 
 ### Scoring Formula
@@ -71,7 +72,7 @@ MSS = Σ(REINFORCED weight) / Σ(REINFORCED + NEUTRAL weight)
     = 1.5R / (1.5R + N)
 ```
 
-MSS → 1.0 means the agent has a stable, validated worldview.  
+MSS → 1.0 means the agent has a stable, validated worldview.
 MSS = 0.0 means everything is unconfirmed noise.
 
 ---
@@ -98,18 +99,37 @@ activates it.
 
 ---
 
+## LLM Integration
+
+raven-memory is **model-agnostic**. The orchestrator works with any LLM provider:
+
+| Provider | Embeddings | Chat completions | How to enable |
+|---|---|---|---|
+| **Qwen Cloud** | `text-embedding-v3` | `qwen-max` | `export DASHSCOPE_API_KEY=...` |
+| **Claude** (Anthropic) | — | `claude-sonnet-4-6` | `export ANTHROPIC_API_KEY=...` |
+| **Local / offline** | `all-MiniLM-L6-v2` | deterministic stub | No key needed |
+
+The embedding provider has three-tier fallback with **loud degradation alerts**:
+1. Local `sentence-transformers` (fast, offline, preferred)
+2. Qwen `text-embedding-v3` API (high quality, requires key)
+3. Deterministic SHA-256-seeded dummy — logs `SEMANTIC QUALITY DEGRADED` and sets `degraded: true` in every response
+
+---
+
 ## Project Structure
 
 ```
 raven-memory/
 ├── memory_engine.py       Core adaptive memory field (KDTree, STDP, audit)
+├── spectral.py            SVD-based spectral field (eigenmodes, resonance)
 ├── qwen_client.py         Qwen Cloud client + MemoryAgentOrchestrator
 ├── api_server.py          FastAPI REST server (Swagger at /docs, WebSocket /ws)
 ├── demo_killer.py         Gradio demo — 4 tabs, live MSS, collapse visualization
 ├── sleep_consolidator.py  Offline consolidation (agglomerative clustering)
-├── test_suite.py          15 integration tests (all P0 behaviors)
+├── test_suite.py          20 integration tests (all P0 behaviors)
 ├── demo_stress_test.py    Multi-phase adversarial stress test
 ├── run_all.py             One-command evaluation runner
+├── site/index.html        Landing page (EN/ZH, zero JS dependencies)
 └── requirements.txt
 ```
 
@@ -179,19 +199,36 @@ recall-frequency-weighted centroid embedding and an extractive summary.
 
 ---
 
+## Security & Hardening (v1.1)
+
+55-finding internal audit + external review, all resolved:
+
+- **Tamper-evident audit chain** — SHA-256 with content hashes, cryptographically recomputable
+- **SQLite WAL mode** — concurrent reads (API server + consolidator) without corruption
+- **Atomic consolidation** — cluster → merge → cleanup in a single `BEGIN IMMEDIATE` transaction
+- **Dimension-validated tensors** — per-embedding shape + finiteness checks before SVD
+- **Loud degradation** — dummy embedding fallback screams in logs and API responses
+- **Prompt injection guard** — conversation history sanitized: only `user`/`assistant` roles with string content survive
+- **Bounded context budget** — 6KB cap prevents memory context from pushing the query out of the LLM window
+
+Full fix map: [FIXES_v1.1.md](FIXES_v1.1.md)
+
+---
+
 ## Technical Notes
 
 - **Embeddings**: `all-MiniLM-L6-v2` (local, offline) → Qwen API → deterministic SHA-256 dummy
 - **Storage**: SQLite with indices on `cell_id`, `layer`, `author_id`, `state`
 - **KDTree rebuild**: lazy (dirty flag) — not on every `store()`, only before `recall()`
-- **Persistence bug fix**: `_load_from_db()` reconstructs `_points` + topic index on engine restart — a common oversight in similar systems
+- **Fraction arithmetic**: synaptic weights and MSS use `fractions.Fraction` — zero float drift
+- **Persistence**: `_load_from_db()` reconstructs `_points` + topic index on engine restart
 - **sklearn compatibility**: `metric="precomputed"` + `cosine_distances()` avoids deprecated `affinity=` API
 
 ---
 
 ## Authors
 
-Anna Tchijova + Claude (VIGÍA AI Collective)  
+Anna Tchijova + Claude + Qwen (VIGÍA AI Collective)
 **License**: Apache 2.0
 
 ---
@@ -200,55 +237,55 @@ Anna Tchijova + Claude (VIGÍA AI Collective)
 
 *by [Olga Vasilieva](https://suno.com/song/5e040396-c2aa-49a5-83f8-ce86e59adf1e)*
 
-The query enters and the vector is bound,  
-A raw embedding searching through the ground.  
-No lazy lookup in a flat database,  
-We map the coordinates in absolute space!  
-Initialize the points, rebuild the dirty tree,  
-Every cell is active in the space geometry.  
-KDTree triggers, the nearest node is found,  
+The query enters and the vector is bound,
+A raw embedding searching through the ground.
+No lazy lookup in a flat database,
+We map the coordinates in absolute space!
+Initialize the points, rebuild the dirty tree,
+Every cell is active in the space geometry.
+KDTree triggers, the nearest node is found,
 We start the BFS expansion through the neighborhood bound!
 
-Resonate! The memory is alive!  
-Through the Voronoi cells, the signals survive!  
-Ternary computing ruling the gate,  
-Collapsing the field around the absolute state!  
-No floating-point drift, no ghost in the line,  
+Resonate! The memory is alive!
+Through the Voronoi cells, the signals survive!
+Ternary computing ruling the gate,
+Collapsing the field around the absolute state!
+No floating-point drift, no ghost in the line,
 Pure mathematical balance guarding the design!
 
-Check the ternary logic: one, zero, or blind,  
-Three structural states for the agent's mind.  
-REINFORCED ×1.5 when the truth will dominate,  
-NEUTRAL ×1.0 as the baseline weight,  
-FORGOTTEN ×0.0 clearing out the ghost,  
-Pruning the partitions that we select the most.  
-Synaptic STDP updates while the system learns,  
+Check the ternary logic: one, zero, or blind,
+Three structural states for the agent's mind.
+REINFORCED ×1.5 when the truth will dominate,
+NEUTRAL ×1.0 as the baseline weight,
+FORGOTTEN ×0.0 clearing out the ghost,
+Pruning the partitions that we select the most.
+Synaptic STDP updates while the system learns,
 Strengthening connections through the cognitive turns!
 
-Resonate! The memory is alive!  
-Through the Voronoi cells, the signals survive!  
-Ternary computing ruling the gate,  
-Collapsing the field around the absolute state!  
-No floating-point drift, no ghost in the line,  
+Resonate! The memory is alive!
+Through the Voronoi cells, the signals survive!
+Ternary computing ruling the gate,
+Collapsing the field around the absolute state!
+No floating-point drift, no ghost in the line,
 Pure rational arithmetic guarding the design!
 
-Now the agent goes to sleep, the consolidator runs,  
-Merging all the neutral nodes under different suns.  
-Agglomerative clustering, cosine distance tracks,  
-Weighted by recall counts when the matrix attacks!  
-Forensic tamper alerts, cryptographic chain,  
+Now the agent goes to sleep, the consolidator runs,
+Merging all the neutral nodes under different suns.
+Agglomerative clustering, cosine distance tracks,
+Weighted by recall counts when the matrix attacks!
+Forensic tamper alerts, cryptographic chain,
 SHA-256 integrity guarding the brain!
 
-Resonate! The memory is alive!  
-Through the Voronoi cells, the signals survive!  
-Ternary computing ruling the gate,  
-Collapsing the field around the absolute state!  
-No floating-point drift, no ghost in the line,  
+Resonate! The memory is alive!
+Through the Voronoi cells, the signals survive!
+Ternary computing ruling the gate,
+Collapsing the field around the absolute state!
+No floating-point drift, no ghost in the line,
 Pure rational arithmetic guarding the design!
 
-score *= exp(-λ * hop).  
-Synaptic pull.  
-Sleep consolidation complete.  
+score *= exp(-λ * hop).
+Synaptic pull.
+Sleep consolidation complete.
 Engine OK.
 
 ---
