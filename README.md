@@ -1,0 +1,197 @@
+# 🦅 raven-memory
+### Adaptive Memory Field for Agentic Systems
+**Track 1: MemoryAgent · Qwen Cloud Hackathon**
+
+> *"The agent doesn't* find *memories — it* resonates *with them."*
+
+---
+
+## The Problem with Vector Search
+
+Most RAG-based agents do this:
+
+```
+query → embed → top-k cosine search → return k documents
+```
+
+This is a database lookup, not memory. It has no dynamics, no contradiction
+detection, no reinforcement, no pruning. Every recall is as fast — and as
+shallow — as the last.
+
+**raven-memory replaces the lookup with a field.**
+
+---
+
+## Architecture
+
+```
+               ┌─────────────────────────────────────────────────┐
+               │              Adaptive Memory Field               │
+               │                                                   │
+  query ──────►│  KDTree        BFS hop       Ternary scoring     │──► top-k results
+  embedding    │  seed cell ──► expansion ──► sim × state × decay  │
+               │                    │                              │
+               │         RESONANT ──┤── INHIBITORY links          │
+               │         (amplify)  │   (silence contradictions)  │
+               │                    │                              │
+               │              STDP updates                         │
+               │         (co-activation strengthens links)         │
+               └─────────────────────────────────────────────────┘
+```
+
+### Key Mechanisms
+
+| Mechanism | What it does |
+|---|---|
+| **KDTree + k-NN graph** | Each stored vector becomes a Voronoi cell. Recall starts at the nearest cell and BFS-expands through the neighbourhood. |
+| **Ternary states** | `REINFORCED ×1.5` / `NEUTRAL ×1.0` / `FORGOTTEN ×0.0`. States multiply the base cosine score. |
+| **Hop decay** | `score × exp(−λ × hop_distance)`. Distant cells are penalised, not cut off. |
+| **STDP dynamics** | Co-activated pairs strengthen (LTP). Absent pairs weaken (LTD). Mirrors Hebbian learning. |
+| **Ternary cell links** | `RESONANT` amplifies neighbours. `INHIBITORY` silences contradictions. Created automatically for same-topic conflicting claims. |
+| **Recency bonus** | 24-hour half-life additive term rewards recently-accessed memories. |
+| **REINFORCED immunity** | A validated truth cannot be silenced by an uninvalidated claim during BFS. |
+| **Stylometric fingerprinting** | Detects if a memory's writing style doesn't match the registered author; auto-degrades to FORGOTTEN. |
+| **Audit hash-chain** | Every recall is cryptographically chained — tamper-proof provenance. |
+
+### Scoring Formula
+
+```
+score = (cosine_sim × state_boost × exp(−λ·hop))
+      + resonant_boost
+      + synaptic_weight × 0.3
+      + exp(−ln2 · age / 24h) × 0.05
+```
+
+### Memory Stability Score (MSS)
+
+```
+MSS = Σ(REINFORCED weight) / Σ(REINFORCED + NEUTRAL weight)
+    = 1.5R / (1.5R + N)
+```
+
+MSS → 1.0 means the agent has a stable, validated worldview.  
+MSS = 0.0 means everything is unconfirmed noise.
+
+---
+
+## Collapse Around Truth
+
+The flagship behavior. Two contradictory memories exist — both NEUTRAL, both competing:
+
+```
+Before reinforcement:
+  VIGIA is deterministic   [NEUTRAL]  score=0.447
+  VIGIA uses ML            [NEUTRAL]  score=0.441   ← nearly tied
+
+User reinforces the first one ↓
+
+After reinforcement:
+  VIGIA is deterministic   [REINFORCED]  score=1.493  ← dominates
+  VIGIA uses ML            [NEUTRAL]     ← silenced (INHIBITORY)
+```
+
+The field collapsed around the validated truth. The INHIBITORY link was already
+present (created automatically when the conflicting claim was stored). Reinforcement
+activates it.
+
+---
+
+## Project Structure
+
+```
+raven-memory/
+├── memory_engine.py       Core adaptive memory field (KDTree, STDP, audit)
+├── qwen_client.py         Qwen Cloud client + MemoryAgentOrchestrator
+├── api_server.py          FastAPI REST server (Swagger at /docs, WebSocket /ws)
+├── demo_killer.py         Gradio demo — 4 tabs, live MSS, collapse visualization
+├── sleep_consolidator.py  Offline consolidation (agglomerative clustering)
+├── test_suite.py          15 integration tests (all P0 behaviors)
+├── demo_stress_test.py    Multi-phase adversarial stress test
+├── run_all.py             One-command evaluation runner
+└── requirements.txt
+```
+
+---
+
+## Quickstart
+
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Run all tests (no API key required)
+python run_all.py
+
+# 3. Launch Gradio demo
+python run_all.py --demo
+# → http://localhost:7860
+
+# 4. Launch REST API
+python run_all.py --api
+# → http://localhost:8000/docs
+```
+
+**With Qwen Cloud** (full LLM responses):
+```bash
+export DASHSCOPE_API_KEY=your_key_here
+python run_all.py --demo
+```
+
+**Without a key**: the system runs fully offline with deterministic SHA-256-seeded
+embeddings and an offline LLM stub. All memory mechanics are identical.
+
+---
+
+## REST API
+
+```
+POST   /memories                    Store a memory
+GET    /memories                    List with filters (layer, state, limit)
+GET    /memories/{id}               Get a single memory
+POST   /recall                      Semantic recall with field dynamics
+POST   /memories/{id}/reinforce     Set state = REINFORCED
+POST   /memories/{id}/forget        Set state = FORGOTTEN
+POST   /cell-links                  Create RESONANT/INHIBITORY link
+GET    /graph                       Export full memory graph (nodes + edges)
+GET    /stats                       Engine stats + MSS
+GET    /audit                       Hash-chain audit trail
+GET    /alerts                      Forensic tamper alerts
+WS     /ws                          Real-time event stream
+```
+
+Full interactive docs at **http://localhost:8000/docs**
+
+---
+
+## Sleep Consolidation
+
+Episodic memories cluster and merge during "sleep":
+
+```bash
+python sleep_consolidator.py --dry-run    # preview
+python sleep_consolidator.py --threshold 0.85
+```
+
+Clusters are formed by agglomerative cosine clustering. The merged node gets a
+recall-frequency-weighted centroid embedding and an extractive summary.
+
+---
+
+## Technical Notes
+
+- **Embeddings**: `all-MiniLM-L6-v2` (local, offline) → Qwen API → deterministic SHA-256 dummy
+- **Storage**: SQLite with indices on `cell_id`, `layer`, `author_id`, `state`
+- **KDTree rebuild**: lazy (dirty flag) — not on every `store()`, only before `recall()`
+- **Persistence bug fix**: `_load_from_db()` reconstructs `_points` + topic index on engine restart — a common oversight in similar systems
+- **sklearn compatibility**: `metric="precomputed"` + `cosine_distances()` avoids deprecated `affinity=` API
+
+---
+
+## Authors
+
+Anna Tchijova + Claude (VIGÍA AI Collective)  
+**License**: Apache 2.0
+
+---
+
+*Qwen Cloud Hackathon · Track 1: MemoryAgent · Deadline: July 9, 2026*
