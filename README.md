@@ -194,4 +194,61 @@ Anna Tchijova + Claude (VIGÍA AI Collective)
 
 ---
 
+## raven-memory
+
+*by [Olga Vasilieva](https://suno.com/song/5e040396-c2aa-49a5-83f8-ce86e59adf1e)*
+
+The query enters and the vector is bound,  
+A raw embedding searching through the ground.  
+No lazy lookup in a flat database,  
+We map the coordinates in absolute space!  
+Initialize the points, rebuild the dirty tree,  
+Every cell is active in the space geometry.  
+KDTree triggers, the nearest node is found,  
+We start the BFS expansion through the neighborhood bound!
+
+Resonate! The memory is alive!  
+Through the Voronoi cells, the signals survive!  
+Ternary computing ruling the gate,  
+Collapsing the field around the absolute state!  
+No floating-point drift, no ghost in the line,  
+Pure mathematical balance guarding the design!
+
+Check the ternary logic: one, zero, or blind,  
+Three structural states for the agent's mind.  
+REINFORCED ×1.5 when the truth will dominate,  
+NEUTRAL ×1.0 as the baseline weight,  
+FORGOTTEN ×0.0 clearing out the ghost,  
+Pruning the partitions that we select the most.  
+Synaptic STDP updates while the system learns,  
+Strengthening connections through the cognitive turns!
+
+Resonate! The memory is alive!  
+Through the Voronoi cells, the signals survive!  
+Ternary computing ruling the gate,  
+Collapsing the field around the absolute state!  
+No floating-point drift, no ghost in the line,  
+Pure rational arithmetic guarding the design!
+
+Now the agent goes to sleep, the consolidator runs,  
+Merging all the neutral nodes under different suns.  
+Agglomerative clustering, cosine distance tracks,  
+Weighted by recall counts when the matrix attacks!  
+Forensic tamper alerts, cryptographic chain,  
+SHA-256 integrity guarding the brain!
+
+Resonate! The memory is alive!  
+Through the Voronoi cells, the signals survive!  
+Ternary computing ruling the gate,  
+Collapsing the field around the absolute state!  
+No floating-point drift, no ghost in the line,  
+Pure rational arithmetic guarding the design!
+
+score *= exp(-λ * hop).  
+Synaptic pull.  
+Sleep consolidation complete.  
+Engine OK.
+
+---
+
 *Qwen Cloud Hackathon · Track 1: MemoryAgent · Deadline: July 9, 2026*
