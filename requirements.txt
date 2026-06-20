@@ -1,0 +1,32 @@
+# raven-memory v1.0
+# Apache 2.0 — VIGÍA AI Collective
+
+# ── Core ──────────────────────────────────────────────────────
+numpy>=1.24.0
+scipy>=1.11.0
+
+# ── Embeddings ────────────────────────────────────────────────
+# Optional: remove BOTH if you only want deterministic dummy embeddings.
+# torch is not imported directly by raven-memory — it is pinned here only
+# because sentence-transformers requires it and we want a reproducible
+# install. Removing sentence-transformers makes torch removable too.
+sentence-transformers>=2.2.0
+torch>=2.0.0
+
+# ── REST API ──────────────────────────────────────────────────
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+
+# ── Demo UI ───────────────────────────────────────────────────
+gradio>=4.0.0
+
+# ── Qwen Cloud client ─────────────────────────────────────────
+requests>=2.31.0
+
+# ── Sleep consolidation ───────────────────────────────────────
+scikit-learn>=1.3.0          # requires metric= (not affinity=) API
+
+# ── Testing ───────────────────────────────────────────────────
+pytest>=7.4.0
+httpx>=0.25.0
