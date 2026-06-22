@@ -67,6 +67,7 @@ class EmbeddingProvider:
     """
 
     MODEL_NAME = "all-MiniLM-L6-v2"
+    LOCAL_MODEL_DIM = 384    # native output dim of MODEL_NAME — fixed, not configurable
     API_RETRIES = 2          # total attempts = 1 + API_RETRIES
     API_BACKOFF_BASE = 0.5   # seconds, exponential
 
@@ -82,10 +83,24 @@ class EmbeddingProvider:
             self._init_local()
 
     def _init_local(self):
+        # The local model has a fixed native dimension. If the engine was
+        # configured for a different embedding_dim (e.g. 512, to match a real
+        # Qwen text-embedding-v3/v4 deployment), silently returning 384-dim
+        # local vectors would be the exact same class of bug we closed in the
+        # dummy tier: a fallback that quietly serves the wrong shape. Refuse
+        # to activate local in that case and fall through to the next tier.
+        if self.config.embedding_dim != self.LOCAL_MODEL_DIM:
+            logger.warning(
+                f"Local model {self.MODEL_NAME} outputs {self.LOCAL_MODEL_DIM}-dim "
+                f"vectors but engine is configured for {self.config.embedding_dim}-dim "
+                f"embeddings — skipping local tier (would silently mismatch). "
+                f"Falling through to Qwen API / dummy."
+            )
+            return
         try:
             from sentence_transformers import SentenceTransformer  # type: ignore
             self._local = SentenceTransformer(self.MODEL_NAME)
-            logger.info(f"Local embeddings: {self.MODEL_NAME} (dim={self.config.embedding_dim})")
+            logger.info(f"Local embeddings: {self.MODEL_NAME} (dim={self.LOCAL_MODEL_DIM})")
         except ImportError:
             logger.warning("sentence-transformers not installed → using deterministic dummy embeddings")
         except Exception as e:
@@ -122,14 +137,21 @@ class EmbeddingProvider:
         if self._use_local and self._local is not None:
             return self._embed_local(texts)
 
-        if not self._use_local and self.config.api_key:
+        # P0: try the API tier whenever local didn't produce a result — not
+        # only when use_local_embeddings was False from the start. Previously
+        # this was gated on `not self._use_local`, so if local was *enabled*
+        # but unavailable (package missing, or a configured embedding_dim
+        # that doesn't match the local model's fixed native dimension), the
+        # chain skipped straight to dummy even with a valid API key sitting
+        # right there. "Three-tier fallback" was only ever two reachable tiers.
+        if self.config.api_key:
             embs = self._embed_api(texts)
             if embs:
                 self.active_provider = "qwen_api"
                 return embs
 
         self._alert_dummy(len(texts))
-        return [self._dummy_embed(t) for t in texts]
+        return [self._dummy_embed(t, dim=self.config.embedding_dim) for t in texts]
 
     def _embed_local(self, texts: List[str]) -> List[np.ndarray]:
         try:
@@ -139,7 +161,7 @@ class EmbeddingProvider:
         except Exception as e:
             logger.error(f"Local embedding failed: {e}")
             self._alert_dummy(len(texts))
-            return [self._dummy_embed(t) for t in texts]
+            return [self._dummy_embed(t, dim=self.config.embedding_dim) for t in texts]
 
     def _embed_api(self, texts: List[str]) -> List[np.ndarray]:
         """P0: retry with exponential backoff before declaring the tier dead."""
@@ -153,6 +175,14 @@ class EmbeddingProvider:
             "input": texts,
             "encoding_format": "float",
         }
+        # text-embedding-v3/v4 are Matryoshka models: they support a
+        # `dimensions` parameter and otherwise return their native default
+        # (1024), which silently mismatches whatever embedding_dim the engine
+        # was built with. Request the engine's dimension explicitly so the
+        # two can never drift apart. Harmless to omit for models that ignore
+        # the field, but only sent for models known to support it.
+        if any(v in self.config.embedding_model for v in ("v3", "v4")):
+            body["dimensions"] = self.config.embedding_dim
         last_err: Optional[Exception] = None
         for attempt in range(1 + self.API_RETRIES):
             try:
@@ -165,7 +195,20 @@ class EmbeddingProvider:
                 resp.raise_for_status()
                 data = resp.json()
                 items = sorted(data["data"], key=lambda x: x["index"])
-                return [np.array(item["embedding"], dtype=np.float32) for item in items]
+                vecs = [np.array(item["embedding"], dtype=np.float32) for item in items]
+                # Catch a dimension mismatch at the source, with a message
+                # that names the actual cause, rather than letting a
+                # wrong-shaped vector propagate to where it's harder to debug
+                # (a generic 502 three layers up in api_server.py).
+                bad = [v.shape[0] for v in vecs if v.shape != (self.config.embedding_dim,)]
+                if bad:
+                    raise ValueError(
+                        f"{self.config.embedding_model} returned {bad[0]}-dim vectors, "
+                        f"engine expects {self.config.embedding_dim}-dim. The model may "
+                        f"not support the requested `dimensions` value — check the "
+                        f"model's supported dimension list."
+                    )
+                return vecs
             except Exception as e:
                 last_err = e
                 if attempt < self.API_RETRIES:

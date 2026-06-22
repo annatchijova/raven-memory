@@ -120,13 +120,38 @@ orchestrator: Optional[MemoryAgentOrchestrator] = None
 ws_clients: List[WebSocket] = []
 _ws_lock = asyncio.Lock()  # P3-1: guard concurrent connect/disconnect
 
+# Embedding configuration — read once, fed to BOTH the engine and the
+# orchestrator's QwenConfig. Previously each constructed its own default
+# (engine: memory_engine.EMBEDDING_DIM=384, orchestrator: QwenConfig.
+# embedding_dim=384) — they happened to agree by coincidence, not by
+# construction. Switching to a real Qwen embedding deployment (text-
+# embedding-v3/v4, which don't support 384 — supported values are 64-2048
+# in Matryoshka steps; 512 is the closest fit) meant changing one and
+# forgetting the other, which fails as an opaque dimension-mismatch 502
+# three layers away from the actual misconfiguration.
+RAVEN_USE_LOCAL_EMBEDDINGS = os.environ.get("RAVEN_USE_LOCAL_EMBEDDINGS", "1") == "1"
+RAVEN_EMBEDDING_DIM = int(os.environ.get(
+    "RAVEN_EMBEDDING_DIM", "384" if RAVEN_USE_LOCAL_EMBEDDINGS else "512"
+))
+RAVEN_EMBEDDING_MODEL = os.environ.get("RAVEN_EMBEDDING_MODEL", "text-embedding-v3")
+RAVEN_LLM_MODEL = os.environ.get("RAVEN_LLM_MODEL", "qwen-max")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global engine, orchestrator
-    logger.info("Starting raven-memory engine…")
-    engine = AdaptiveMemoryEngine()
-    orchestrator = MemoryAgentOrchestrator(engine, QwenConfig(use_local_embeddings=True))
+    logger.info(
+        f"Starting raven-memory engine… "
+        f"(embeddings: {'local' if RAVEN_USE_LOCAL_EMBEDDINGS else 'qwen_api'}, "
+        f"dim={RAVEN_EMBEDDING_DIM})"
+    )
+    engine = AdaptiveMemoryEngine(embedding_dim=RAVEN_EMBEDDING_DIM)
+    orchestrator = MemoryAgentOrchestrator(engine, QwenConfig(
+        use_local_embeddings=RAVEN_USE_LOCAL_EMBEDDINGS,
+        embedding_dim=RAVEN_EMBEDDING_DIM,
+        embedding_model=RAVEN_EMBEDDING_MODEL,
+        model=RAVEN_LLM_MODEL,
+    ))
     logger.info(f"Engine ready. Stats: {engine.get_stats()}")
     yield
     logger.info("Shutting down raven-memory engine")
