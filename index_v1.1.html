@@ -60,9 +60,24 @@ section{position:relative;padding:110px 0}
 .sec-head h2{font-size:clamp(30px,4.4vw,46px);margin:14px 0 18px}
 .sec-head p{font-size:18px}
 
+/* ---- top banner ---- */
+.top-banner{
+  position:fixed;top:0;left:0;right:0;z-index:60;
+  height:44px;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(90deg,var(--violet) 0%,var(--resonance) 55%,var(--gold) 100%);
+  font-family:var(--mono);font-size:13.5px;letter-spacing:.04em;
+}
+.top-banner a{
+  color:#06251F;font-weight:700;text-decoration:none;
+  display:flex;align-items:center;gap:8px;
+  transition:opacity .18s;
+}
+.top-banner a:hover{opacity:.82}
+.top-banner a::after{content:"↗";font-size:12px}
+
 /* ---- nav ---- */
 nav{
-  position:fixed;inset:0 0 auto 0;z-index:50;
+  position:fixed;top:44px;left:0;right:0;z-index:50;
   backdrop-filter:blur(14px);
   background:linear-gradient(rgba(10,13,22,.82),rgba(10,13,22,.55));
   border-bottom:1px solid var(--hairline);
@@ -310,6 +325,9 @@ footer{border-top:1px solid var(--hairline);padding:54px 0 70px;background:var(-
 </head>
 <body>
 
+<div class="top-banner" role="complementary">
+  <a href="https://annatchijova.github.io/vigia/raven-memory-2.html" target="_blank" rel="noopener" data-i18n="banner.link">Live Project Page: raven-memory v2</a>
+</div>
 <nav>
   <div class="nav-in">
     <a class="logo" href="#top" aria-label="raven-memory">
@@ -587,6 +605,7 @@ footer{border-top:1px solid var(--hairline);padding:54px 0 70px;background:var(-
    ============================================================ */
 const I18N = {
 en:{
+ "banner.link":"Live Project Page: raven-memory v2",
  "nav.field":"The field","nav.play":"Playground","nav.dream":"Dreaming","nav.audit":"Audit chain","nav.stack":"Stack",
  "hero.eyebrow":"Qwen Cloud Hackathon · Track 1 — MemoryAgent",
  "hero.title":"Memory is a <em>field</em>,<br>not a lookup table.",
@@ -659,6 +678,7 @@ en:{
  "mem.cons":"Consolidated semantic node",
 },
 zh:{
+ "banner.link":"项目主页：raven-memory v2",
  "nav.field":"记忆场","nav.play":"互动演示","nav.dream":"做梦","nav.audit":"审计链","nav.stack":"技术栈",
  "hero.eyebrow":"通义千问云端黑客松 · 赛道一 — MemoryAgent",
  "hero.title":"记忆是一片<em>场</em>，<br>而不是一张查找表。",
