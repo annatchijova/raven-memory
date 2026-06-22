@@ -133,3 +133,27 @@ keys). The genuine findings, verified and fixed:
   sentence-transformers and the Qwen API, and the security env vars.
 
 **Suites:** 20/20 engine · 11/11 spectral · stress + API smoke green.
+
+---
+
+## v1.1 — Third pass: real Qwen Cloud embeddings wiring
+
+Triggered by switching the live test/recording session to real Qwen embeddings
+(text-embedding-v3, 512-dim — 384 is not a supported Matryoshka cut for that
+model; supported values are the 64–2048 step series). Found while wiring it:
+
+| Bug | Real impact | Fix |
+|---|---|---|
+| Fallback chain was never 3-tier | `embed()` only tried the Qwen API when `use_local_embeddings=False` from the start. If local was *enabled* but unavailable (package missing, or — newly — a dimension mismatch), it skipped straight to dummy even with a valid API key configured. | API tier now tried whenever local didn't produce a result, not only when local was disabled by config. |
+| Dummy fallback ignored `embedding_dim` | `_dummy_embed(t)` always used its hardcoded default (384), regardless of what dimension the engine actually expected. | Both call sites now pass `dim=self.config.embedding_dim`. |
+| Local tier could silently mismatch | `all-MiniLM-L6-v2` always outputs 384-dim vectors. If `embedding_dim` was set to anything else (e.g. 512 for real Qwen), local would still "succeed" and hand back 384-dim vectors. | `_init_local` now checks the native dim against config and refuses to activate local on mismatch — falls through instead of silently misreporting `dim={config.embedding_dim}` in its own log line. |
+| Qwen embedding API never requested a dimension | `_embed_api`'s request body had no `dimensions` field, so text-embedding-v3/v4 returned their native default (1024) regardless of `config.embedding_dim` — guaranteed mismatch the moment a non-default dimension was configured. | `dimensions: config.embedding_dim` now sent for any `v3`/`v4` model. |
+| No validation at the source | A dimension mismatch from the API surfaced only as a generic 502 three layers away (api_server.py), with no indication of *why*. | `_embed_api` now validates response shape immediately and raises a message naming the model, the dimension it returned, and the dimension expected. |
+| Engine and orchestrator dimension could silently diverge | `api_server.py` built `AdaptiveMemoryEngine()` (always 384, the module default) and `QwenConfig()` (independently defaulted to 384) — they only agreed by coincidence, not by construction. | Both now read from one set of env vars (`RAVEN_USE_LOCAL_EMBEDDINGS`, `RAVEN_EMBEDDING_DIM`, `RAVEN_EMBEDDING_MODEL`, `RAVEN_LLM_MODEL`) and are constructed from the same resolved values — structurally can't drift apart. |
+
+Verified with `unittest.mock` (no real network — the sandbox has no egress to
+`aliyuncs.com`): real-Qwen-512 path requests the right dimension and returns
+correctly-shaped vectors; local-enabled-but-incompatible correctly falls through
+to the API tier instead of dummy; an API dimension mismatch correctly falls
+through to a dummy vector of the *right* shape with full degradation telemetry.
+Default mode (local, 384) unchanged — 20/20 engine, 11/11 spectral still green.

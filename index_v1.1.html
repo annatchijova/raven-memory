@@ -1,0 +1,1282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>raven-memory — a memory field that dreams</title>
+<meta name="description" content="An adaptive memory substrate for agentic AI: Voronoi geometry, ternary computing, spectral optics, and sleep consolidation. Qwen Cloud Hackathon, Track 1: MemoryAgent.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=Schibsted+Grotesk:wght@400;500;700&family=Spline+Sans+Mono:wght@400;500&family=Noto+Serif+SC:wght@600;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   raven-memory — design tokens
+   night #0A0D16 · membrane #141A2A · moonlight #E9ECF5
+   plume #939BB0 · resonance #5EE6D0 · veridical gold #E9B94D
+   inhibition ember #E2604E · spectral violet #8B7CF6
+   ============================================================ */
+:root{
+  --night:#0A0D16;
+  --night-2:#0D1120;
+  --membrane:#141A2A;
+  --membrane-2:#1A2236;
+  --hairline:rgba(233,236,245,.08);
+  --hairline-2:rgba(233,236,245,.14);
+  --moonlight:#E9ECF5;
+  --plume:#939BB0;
+  --plume-dim:#5E6activé680;
+  --resonance:#5EE6D0;
+  --gold:#E9B94D;
+  --ember:#E2604E;
+  --violet:#8B7CF6;
+  --display:'Fraunces','Noto Serif SC',Georgia,serif;
+  --body:'Schibsted Grotesk',-apple-system,'PingFang SC','Hiragino Sans GB','Microsoft YaHei','Noto Sans SC',sans-serif;
+  --mono:'Spline Sans Mono',ui-monospace,'SF Mono',Menlo,monospace;
+  --max:1180px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  background:var(--night);
+  color:var(--plume);
+  font-family:var(--body);
+  font-size:17px;
+  line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+::selection{background:rgba(94,230,208,.25);color:var(--moonlight)}
+h1,h2,h3{font-family:var(--display);color:var(--moonlight);font-weight:500;line-height:1.12}
+a{color:var(--resonance);text-decoration:none}
+button{font-family:var(--body);cursor:pointer}
+.wrap{max-width:var(--max);margin:0 auto;padding:0 28px}
+.eyebrow{
+  font-family:var(--mono);font-size:11.5px;letter-spacing:.22em;
+  text-transform:uppercase;color:var(--resonance);
+}
+html[lang="zh"] .eyebrow{letter-spacing:.34em}
+section{position:relative;padding:110px 0}
+.sec-head{max-width:680px;margin-bottom:56px}
+.sec-head h2{font-size:clamp(30px,4.4vw,46px);margin:14px 0 18px}
+.sec-head p{font-size:18px}
+
+/* ---- nav ---- */
+nav{
+  position:fixed;inset:0 0 auto 0;z-index:50;
+  backdrop-filter:blur(14px);
+  background:linear-gradient(rgba(10,13,22,.82),rgba(10,13,22,.55));
+  border-bottom:1px solid var(--hairline);
+}
+.nav-in{max-width:var(--max);margin:0 auto;padding:0 28px;height:62px;display:flex;align-items:center;gap:30px}
+.logo{display:flex;align-items:center;gap:11px;color:var(--moonlight);font-family:var(--display);font-size:19px;font-style:italic}
+.logo svg{display:block}
+.nav-links{display:flex;gap:26px;margin-left:auto}
+.nav-links a{color:var(--plume);font-size:14.5px;transition:color .2s}
+.nav-links a:hover{color:var(--moonlight)}
+#langToggle{
+  display:flex;border:1px solid var(--hairline-2);border-radius:999px;overflow:hidden;
+  background:rgba(20,26,42,.6);
+}
+#langToggle button{
+  background:none;border:0;color:var(--plume);font-size:13px;padding:7px 14px;
+  font-family:var(--mono);transition:all .2s;
+}
+#langToggle button.active{background:var(--resonance);color:#06251F;font-weight:500}
+#langToggle button:focus-visible{outline:2px solid var(--resonance);outline-offset:-2px}
+
+/* ---- hero ---- */
+header{position:relative;height:100svh;min-height:640px;display:flex;align-items:flex-end;overflow:hidden}
+#heroField{position:absolute;inset:0;width:100%;height:100%}
+.hero-veil{
+  position:absolute;inset:0;pointer-events:none;
+  background:
+    radial-gradient(120% 90% at 18% 88%, rgba(10,13,22,.88) 0%, rgba(10,13,22,.45) 42%, transparent 70%),
+    linear-gradient(rgba(10,13,22,.35), transparent 30%, transparent 60%, rgba(10,13,22,.85));
+}
+.hero-in{position:relative;z-index:2;width:100%;padding-bottom:9vh}
+.hero-in .eyebrow{display:block;margin-bottom:22px}
+h1{font-size:clamp(44px,7.2vw,92px);font-weight:380;letter-spacing:-.012em;max-width:13ch}
+h1 em{font-style:italic;font-weight:430;
+  background:linear-gradient(96deg,var(--violet) 0%,var(--resonance) 48%,var(--gold) 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+html[lang="zh"] h1{font-weight:600;letter-spacing:.01em;max-width:15ch}
+.hero-sub{max-width:560px;font-size:19px;margin:26px 0 38px;color:var(--plume)}
+.hero-cta{display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+.btn{
+  display:inline-flex;align-items:center;gap:9px;border-radius:999px;
+  padding:14px 26px;font-size:15.5px;font-weight:500;border:1px solid transparent;
+  transition:transform .18s,box-shadow .18s,background .18s;
+}
+.btn:active{transform:translateY(1px)}
+.btn-gold{background:var(--gold);color:#241A05}
+.btn-gold:hover{box-shadow:0 0 0 5px rgba(233,185,77,.18)}
+.btn-ghost{border-color:var(--hairline-2);color:var(--moonlight);background:rgba(20,26,42,.4)}
+.btn-ghost:hover{border-color:var(--resonance);color:var(--resonance)}
+.hero-hud{
+  position:absolute;right:30px;bottom:30px;z-index:2;
+  display:flex;gap:22px;font-family:var(--mono);font-size:12px;
+  color:var(--plume);background:rgba(13,17,32,.55);border:1px solid var(--hairline);
+  padding:12px 18px;border-radius:12px;backdrop-filter:blur(8px);
+}
+.hero-hud b{display:block;color:var(--moonlight);font-size:16px;font-weight:500}
+.hud-mss b{color:var(--gold)}
+
+/* ---- legend chips ---- */
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:30px}
+.chip{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-family:var(--mono);
+  border:1px solid var(--hairline);border-radius:999px;padding:6px 13px;color:var(--plume)}
+.dot{width:9px;height:9px;border-radius:50%}
+.dot.g{background:var(--gold);box-shadow:0 0 8px rgba(233,185,77,.8)}
+.dot.n{background:#3A4663}
+.dot.f{background:#1C2336;border:1px solid var(--hairline-2)}
+.dot.r{background:var(--ember);box-shadow:0 0 8px rgba(226,96,78,.7)}
+.dot.c{background:var(--resonance);box-shadow:0 0 8px rgba(94,230,208,.7)}
+
+/* ---- problem section ---- */
+.compare{display:grid;grid-template-columns:1fr 1fr;gap:26px;margin-top:18px}
+.compare .panel{border:1px solid var(--hairline);border-radius:18px;padding:34px;background:var(--night-2)}
+.panel h3{font-size:23px;margin-bottom:14px}
+.panel.flat h3{color:var(--plume)}
+.panel.field-p{border-color:rgba(94,230,208,.28);
+  background:linear-gradient(165deg,rgba(94,230,208,.06),rgba(139,124,246,.05) 60%,var(--night-2))}
+.panel ul{list-style:none;margin-top:16px}
+.panel li{padding:8px 0;border-top:1px solid var(--hairline);font-size:15.5px}
+.panel li::before{content:"— ";color:var(--plume-dim)}
+.panel.field-p li::before{content:"◆ ";color:var(--resonance);font-size:11px}
+
+/* ---- triptych ---- */
+#physics{background:linear-gradient(var(--night),var(--night-2) 30%,var(--night))}
+.trip{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+.card{
+  border:1px solid var(--hairline);border-radius:18px;padding:32px 28px;background:var(--membrane);
+  transition:transform .25s,border-color .25s;
+}
+.card:hover{transform:translateY(-4px);border-color:var(--hairline-2)}
+.card .glyph{height:118px;margin-bottom:22px;display:flex;align-items:center;justify-content:center}
+.card h3{font-size:21px;margin-bottom:11px}
+.card p{font-size:15.5px}
+.card .tags{margin-top:18px;display:flex;gap:8px;flex-wrap:wrap}
+.tag{font-family:var(--mono);font-size:11px;color:var(--resonance);border:1px solid rgba(94,230,208,.3);
+  border-radius:6px;padding:3px 8px}
+.card.gold .tag{color:var(--gold);border-color:rgba(233,185,77,.35)}
+.card.violet .tag{color:var(--violet);border-color:rgba(139,124,246,.4)}
+
+/* ---- playground ---- */
+#playground{padding-top:90px}
+.pg{border:1px solid var(--hairline-2);border-radius:22px;overflow:hidden;background:var(--night-2);
+  box-shadow:0 30px 80px rgba(0,0,0,.5)}
+.pg-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:16px 20px;border-bottom:1px solid var(--hairline);
+  background:rgba(20,26,42,.5)}
+.pg-bar .spacer{flex:1}
+.pbtn{
+  border:1px solid var(--hairline-2);background:var(--membrane);color:var(--moonlight);
+  font-size:13.5px;padding:9px 16px;border-radius:9px;display:inline-flex;align-items:center;gap:7px;
+  transition:border-color .15s,background .15s;
+}
+.pbtn:hover{border-color:var(--resonance)}
+.pbtn:disabled{opacity:.4;cursor:default}
+.pbtn .k{width:8px;height:8px;border-radius:50%}
+.pbtn.play{background:var(--gold);color:#241A05;border-color:transparent;font-weight:600}
+.pbtn.play:hover{box-shadow:0 0 0 4px rgba(233,185,77,.16)}
+.pg-body{display:grid;grid-template-columns:1fr 320px;min-height:520px}
+.pg-canvas-wrap{position:relative}
+#fieldCanvas{display:block;width:100%;height:100%;min-height:520px;cursor:crosshair}
+.caption{
+  position:absolute;left:18px;right:18px;bottom:16px;
+  background:rgba(10,13,22,.82);border:1px solid var(--hairline-2);border-radius:12px;
+  padding:13px 18px;font-size:15px;color:var(--moonlight);backdrop-filter:blur(6px);
+  opacity:0;transform:translateY(8px);transition:opacity .35s,transform .35s;pointer-events:none;
+}
+.caption.show{opacity:1;transform:none}
+.caption .step{font-family:var(--mono);font-size:11px;color:var(--gold);letter-spacing:.18em;display:block;margin-bottom:3px}
+.pg-side{border-left:1px solid var(--hairline);padding:20px;display:flex;flex-direction:column;gap:18px;background:var(--night)}
+.pg-side h4{font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--plume);font-weight:500}
+.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.stat{border:1px solid var(--hairline);border-radius:10px;padding:10px 12px}
+.stat b{display:block;font-size:20px;color:var(--moonlight);font-weight:500;font-family:var(--mono)}
+.stat span{font-size:11.5px}
+.stat.mss b{color:var(--gold)}
+#results{display:flex;flex-direction:column;gap:7px;min-height:120px}
+.res{font-size:13px;display:flex;align-items:center;gap:9px}
+.res .bar{height:7px;border-radius:4px;background:linear-gradient(90deg,var(--violet),var(--resonance));min-width:3px}
+.res.rf .bar{background:linear-gradient(90deg,var(--gold),#F4D488)}
+.res .lbl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--moonlight);flex:1}
+.res .sc{font-family:var(--mono);font-size:11.5px;color:var(--plume)}
+.res.silenced{opacity:.45}
+.res.silenced .bar{background:var(--ember);height:2px}
+.res.silenced .lbl{text-decoration:line-through;color:var(--plume)}
+#emptyRes{font-size:13.5px;color:var(--plume-dim)}
+.hint{font-size:12.5px;color:var(--plume-dim);border-top:1px solid var(--hairline);padding-top:14px;margin-top:auto}
+
+/* ---- dream ---- */
+#dream .flow{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-top:30px;position:relative}
+.fstep{padding:26px 22px;border:1px solid var(--hairline);background:var(--membrane);position:relative}
+.fstep:first-child{border-radius:16px 0 0 16px}
+.fstep:last-child{border-radius:0 16px 16px 0;border-left:0;
+  background:linear-gradient(150deg,rgba(233,185,77,.1),var(--membrane) 55%)}
+.fstep+.fstep{border-left:0}
+.fstep .fnum{font-family:var(--mono);color:var(--violet);font-size:12px;letter-spacing:.15em}
+.fstep:last-child .fnum{color:var(--gold)}
+.fstep h3{font-size:17px;margin:8px 0 8px}
+.fstep p{font-size:14px}
+.fstep::after{
+  content:"→";position:absolute;right:-10px;top:50%;transform:translateY(-50%);
+  z-index:2;color:var(--resonance);font-size:18px;background:var(--night);border-radius:50%;
+  width:22px;height:22px;display:flex;align-items:center;justify-content:center;
+}
+.fstep:last-child::after{display:none}
+.dream-note{margin-top:26px;border-left:2px solid var(--gold);padding:6px 0 6px 20px;font-size:16px;max-width:720px}
+.dream-note em{color:var(--gold);font-style:italic;font-family:var(--display)}
+
+/* ---- audit ---- */
+#audit{background:var(--night-2)}
+.chain-wrap{margin-top:8px}
+.chain{display:flex;gap:0;overflow-x:auto;padding:26px 4px}
+.block{
+  min-width:172px;border:1px solid var(--hairline-2);border-radius:13px;padding:15px 16px;
+  background:var(--membrane);position:relative;margin-right:34px;flex-shrink:0;
+  transition:border-color .3s,box-shadow .3s;cursor:pointer;
+}
+.block::after{
+  content:"";position:absolute;right:-34px;top:50%;width:34px;height:2px;
+  background:linear-gradient(90deg,var(--resonance),rgba(94,230,208,.25));
+}
+.block:last-child::after{display:none}
+.block .op{font-family:var(--mono);font-size:11px;letter-spacing:.13em;color:var(--resonance);text-transform:uppercase}
+.block .h{font-family:var(--mono);font-size:12.5px;color:var(--moonlight);margin-top:7px;word-break:break-all}
+.block .ph{font-family:var(--mono);font-size:10.5px;color:var(--plume-dim);margin-top:5px;word-break:break-all}
+.block.ok{border-color:rgba(94,230,208,.4)}
+.block.bad{border-color:var(--ember);box-shadow:0 0 22px rgba(226,96,78,.25)}
+.block.bad .op{color:var(--ember)}
+.block.bad::after{background:var(--ember)}
+.block.tampered{border-style:dashed;border-color:var(--ember)}
+.chain-controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:6px}
+#chainVerdict{font-family:var(--mono);font-size:13px;padding:8px 14px;border-radius:9px;border:1px solid var(--hairline)}
+#chainVerdict.ok{color:var(--resonance);border-color:rgba(94,230,208,.4)}
+#chainVerdict.bad{color:var(--ember);border-color:rgba(226,96,78,.5)}
+.audit-cols{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:44px}
+.acard{border:1px solid var(--hairline);border-radius:16px;padding:28px;background:var(--night)}
+.acard h3{font-size:19px;margin-bottom:10px}
+.acard p{font-size:15px}
+.acard code{font-family:var(--mono);font-size:13px;color:var(--gold);background:rgba(233,185,77,.08);
+  padding:2px 7px;border-radius:5px}
+
+/* ---- numbers / stack ---- */
+.numbers{display:grid;grid-template-columns:repeat(4,1fr);gap:22px;margin-top:14px}
+.num{border-top:1px solid var(--hairline-2);padding-top:18px}
+.num b{font-family:var(--display);font-size:46px;font-weight:430;color:var(--moonlight);display:block;line-height:1}
+.num b i{font-style:normal;font-size:24px;color:var(--plume)}
+.num.gold b{color:var(--gold)}
+.num.cy b{color:var(--resonance)}
+.num span{font-size:14px;display:block;margin-top:8px}
+.stack{display:flex;gap:10px;flex-wrap:wrap;margin-top:44px}
+.sbadge{font-family:var(--mono);font-size:13px;border:1px solid var(--hairline-2);border-radius:9px;
+  padding:9px 15px;color:var(--moonlight);background:var(--membrane)}
+.sbadge i{font-style:normal;color:var(--resonance);margin-right:7px}
+
+/* ---- footer ---- */
+footer{border-top:1px solid var(--hairline);padding:54px 0 70px;background:var(--night-2)}
+.foot{display:flex;justify-content:space-between;gap:30px;flex-wrap:wrap;align-items:flex-start}
+.foot .logo{font-size:21px}
+.foot-meta{font-size:14px;text-align:right}
+.foot-meta b{color:var(--moonlight);font-weight:500}
+
+/* ---- reveal ---- */
+.rv{opacity:0;transform:translateY(26px);transition:opacity .7s ease,transform .7s ease}
+.rv.in{opacity:1;transform:none}
+
+@media (prefers-reduced-motion: reduce){
+  html{scroll-behavior:auto}
+  .rv{opacity:1;transform:none;transition:none}
+  .card:hover{transform:none}
+}
+@media (max-width:980px){
+  .trip{grid-template-columns:1fr}
+  .pg-body{grid-template-columns:1fr}
+  .pg-side{border-left:0;border-top:1px solid var(--hairline)}
+  .compare,.audit-cols{grid-template-columns:1fr}
+  #dream .flow{grid-template-columns:1fr 1fr}
+  .fstep:first-child{border-radius:16px 0 0 0}
+  .fstep:nth-child(2){border-radius:0 16px 0 0}
+  .fstep:nth-child(3){border-left:1px solid var(--hairline);border-top:0;border-radius:0 0 0 16px}
+  .fstep:last-child{border-radius:0 0 16px 0;border-top:0}
+  .fstep:nth-child(2)::after,.fstep:nth-child(3)::after{display:none}
+  .numbers{grid-template-columns:1fr 1fr}
+  .nav-links{display:none}
+  .hero-hud{display:none}
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-in">
+    <a class="logo" href="#top" aria-label="raven-memory">
+      <svg width="26" height="26" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+        <path d="M3 19 C7 8 13 4 23 4 C19 7 18 9 17.5 11.5 L21 12 L16.5 13.5 C15 18 10 21 3 19 Z" fill="#E9ECF5"/>
+        <circle cx="18.2" cy="7.6" r="1" fill="#0A0D16"/>
+      </svg>
+      raven-memory
+    </a>
+    <div class="nav-links">
+      <a href="#problem" data-i18n="nav.field">The field</a>
+      <a href="#playground" data-i18n="nav.play">Playground</a>
+      <a href="#dream" data-i18n="nav.dream">Dreaming</a>
+      <a href="#audit" data-i18n="nav.audit">Audit chain</a>
+      <a href="#stack" data-i18n="nav.stack">Stack</a>
+    </div>
+    <div id="langToggle" role="group" aria-label="Language">
+      <button id="btnEn" class="active" aria-pressed="true">EN</button>
+      <button id="btnZh" aria-pressed="false">中文</button>
+    </div>
+  </div>
+</nav>
+
+<header id="top">
+  <canvas id="heroField" aria-hidden="true"></canvas>
+  <div class="hero-veil"></div>
+  <div class="wrap hero-in">
+    <span class="eyebrow" data-i18n="hero.eyebrow">Qwen Cloud Hackathon · Track 1 — MemoryAgent</span>
+    <h1 data-i18n-html="hero.title">Memory is a <em>field</em>,<br>not a lookup table.</h1>
+    <p class="hero-sub" data-i18n="hero.sub">raven-memory gives AI agents a living memory substrate: Voronoi geometry, ternary logic, spectral optics — with synapses that learn, contradictions that inhibit, and nights in which it dreams.</p>
+    <div class="hero-cta">
+      <a class="btn btn-gold" href="#playground" data-i18n="hero.cta1">Play with the field</a>
+      <a class="btn btn-ghost" href="#problem" data-i18n="hero.cta2">Read the architecture</a>
+    </div>
+    <div class="legend">
+      <span class="chip"><span class="dot g"></span><span data-i18n="legend.r">REINFORCED — validated truth</span></span>
+      <span class="chip"><span class="dot n"></span><span data-i18n="legend.n">NEUTRAL — open hypothesis</span></span>
+      <span class="chip"><span class="dot f"></span><span data-i18n="legend.f">FORGOTTEN — silenced</span></span>
+      <span class="chip"><span class="dot r"></span><span data-i18n="legend.i">inhibitory link</span></span>
+    </div>
+  </div>
+  <div class="hero-hud" aria-hidden="true">
+    <div class="hud-mss"><b id="hudMss">—</b><span data-i18n="hud.mss">stability (MSS)</span></div>
+    <div><b id="hudCells">—</b><span data-i18n="hud.cells">cells</span></div>
+    <div><b id="hudLinks">—</b><span data-i18n="hud.links">inhibitory</span></div>
+  </div>
+</header>
+
+<!-- ============ PROBLEM ============ -->
+<section id="problem">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="eyebrow" data-i18n="prob.eyebrow">Why a field</span>
+      <h2 data-i18n="prob.title">Flat vector search remembers everything — and learns nothing.</h2>
+      <p data-i18n="prob.sub">Most agent memory is a cosine ranking over a static index. Every memory is equally true forever; contradictions live side by side; nothing consolidates. raven-memory replaces the index with a dynamical system.</p>
+    </div>
+    <div class="compare rv">
+      <div class="panel flat">
+        <h3 data-i18n="prob.flat.t">Flat vector store</h3>
+        <ul>
+          <li data-i18n="prob.flat.1">Similarity is the only signal — no notion of validation</li>
+          <li data-i18n="prob.flat.2">Contradictions are retrieved together, confidence-free</li>
+          <li data-i18n="prob.flat.3">The index only grows; old noise ranks like new truth</li>
+          <li data-i18n="prob.flat.4">Retrieval is stateless — recalling changes nothing</li>
+        </ul>
+      </div>
+      <div class="panel field-p">
+        <h3 data-i18n="prob.field.t">raven-memory field</h3>
+        <ul>
+          <li data-i18n="prob.field.1">Ternary states: REINFORCED truths outshine, FORGOTTEN noise goes dark</li>
+          <li data-i18n="prob.field.2">Contradictions auto-wire inhibitory links — validated memories silence rivals</li>
+          <li data-i18n="prob.field.3">Sleep consolidation merges episodic clusters into semantic nodes</li>
+          <li data-i18n="prob.field.4">Every recall is plastic: STDP strengthens co-activated synapses</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ THREE PHYSICS ============ -->
+<section id="physics">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="eyebrow" data-i18n="phys.eyebrow">Three borrowed physics</span>
+      <h2 data-i18n="phys.title">Geometry, logic, and light.</h2>
+      <p data-i18n="phys.sub">Each memory lives in a spatial cell, carries a three-valued state, and resonates — or doesn't — with the spectral modes of the whole field.</p>
+    </div>
+    <div class="trip">
+      <div class="card rv">
+        <div class="glyph">
+          <svg width="150" height="110" viewBox="0 0 150 110" fill="none" aria-hidden="true">
+            <path d="M0 38 L46 30 L74 0 M46 30 L58 72 L24 110 M58 72 L108 64 L118 0 M108 64 L150 84 M58 72 L70 110" stroke="rgba(94,230,208,.55)" stroke-width="1.3"/>
+            <circle cx="30" cy="58" r="4" fill="#3A4663"/><circle cx="88" cy="34" r="4.5" fill="#E9B94D"/>
+            <circle cx="120" cy="88" r="4" fill="#3A4663"/><circle cx="44" cy="12" r="3.5" fill="#1C2336" stroke="rgba(233,236,245,.3)"/>
+          </svg>
+        </div>
+        <h3 data-i18n="phys.v.t">Voronoi geometry</h3>
+        <p data-i18n="phys.v.p">Embeddings seed a Voronoi tessellation: each memory owns a cell, and cell adjacency defines hops. Recall activates a neighborhood, decaying as e^(−0.15·hops) — relevance has a literal shape.</p>
+        <div class="tags"><span class="tag">KDTree</span><span class="tag">k=6 neighbors</span><span class="tag">BFS hops</span></div>
+      </div>
+      <div class="card gold rv">
+        <div class="glyph">
+          <svg width="150" height="110" viewBox="0 0 150 110" fill="none" aria-hidden="true">
+            <text x="14" y="46" font-family="monospace" font-size="34" fill="#E9B94D">+1</text>
+            <text x="62" y="46" font-family="monospace" font-size="34" fill="#5E6680">0</text>
+            <text x="96" y="46" font-family="monospace" font-size="34" fill="#E2604E">−1</text>
+            <path d="M20 76 Q75 100 130 76" stroke="rgba(233,185,77,.5)" stroke-width="1.4" fill="none"/>
+            <path d="M20 84 Q75 60 130 84" stroke="rgba(226,96,78,.5)" stroke-width="1.4" stroke-dasharray="4 4" fill="none"/>
+          </svg>
+        </div>
+        <h3 data-i18n="phys.t.t">Ternary computing</h3>
+        <p data-i18n="phys.t.p">States and links are three-valued. Memories are REINFORCED, NEUTRAL or FORGOTTEN; links are RESONANT, NEUTRAL or INHIBITORY. When a memory is validated, its inhibitory links silence contradictors: the field collapses around truth.</p>
+        <div class="tags"><span class="tag">×1.5 / ×1.0 / ×0.1</span><span class="tag">auto-inhibition</span></div>
+      </div>
+      <div class="card violet rv">
+        <div class="glyph">
+          <svg width="150" height="110" viewBox="0 0 150 110" fill="none" aria-hidden="true">
+            <path d="M6 60 Q24 18 42 60 T78 60 T114 60 T150 60" stroke="#8B7CF6" stroke-width="1.6" fill="none" opacity=".9"/>
+            <path d="M6 60 Q24 96 42 60 T78 60 T114 60 T150 60" stroke="#5EE6D0" stroke-width="1.6" fill="none" opacity=".75"/>
+            <line x1="6" y1="60" x2="150" y2="60" stroke="rgba(233,236,245,.18)" stroke-width="1"/>
+          </svg>
+        </div>
+        <h3 data-i18n="phys.s.t">Spectral optics</h3>
+        <p data-i18n="phys.s.p">An SVD over all active embeddings extracts the field's eigen-modes — properties of the cavity, not of any source. A query that projects onto strong modes resonates. Resonance and coherence ship as epistemic metadata, never as score hacks.</p>
+        <div class="tags"><span class="tag">SVD</span><span class="tag">≥99% variance</span><span class="tag">deterministic</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PLAYGROUND ============ -->
+<section id="playground">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="eyebrow" data-i18n="pg.eyebrow">Interactive simulation — same rules as the Python engine</span>
+      <h2 data-i18n="pg.title">Touch the field.</h2>
+      <p data-i18n="pg.sub">This widget reimplements the engine's rules in the browser — ternary states, hop-decay recall, auto-inhibition, cluster-and-merge — so you can feel the dynamics. The production engine (FastAPI · SQLite · SVD · STDP) runs in Python; the README and demo video show it end to end.</p>
+    </div>
+    <div class="pg rv">
+      <div class="pg-bar">
+        <button class="pbtn play" id="bPlay" data-i18n="pg.play">▶ Play the story</button>
+        <button class="pbtn" id="bStore"><span class="k" style="background:#3A4663"></span><span data-i18n="pg.store">Store memory</span></button>
+        <button class="pbtn" id="bContra"><span class="k" style="background:var(--ember)"></span><span data-i18n="pg.contra">Inject contradiction</span></button>
+        <button class="pbtn" id="bReinforce"><span class="k" style="background:var(--gold)"></span><span data-i18n="pg.reinforce">Validate truth</span></button>
+        <button class="pbtn" id="bRecall"><span class="k" style="background:var(--resonance)"></span><span data-i18n="pg.recall">Recall</span></button>
+        <button class="pbtn" id="bSleep">🌙 <span data-i18n="pg.sleep">Sleep</span></button>
+        <span class="spacer"></span>
+        <button class="pbtn" id="bReset" data-i18n="pg.reset">Reset</button>
+      </div>
+      <div class="pg-body">
+        <div class="pg-canvas-wrap">
+          <canvas id="fieldCanvas"></canvas>
+          <div class="caption" id="caption"><span class="step" id="capStep"></span><span id="capText"></span></div>
+        </div>
+        <aside class="pg-side">
+          <div>
+            <h4 data-i18n="pg.statsT">Field telemetry</h4>
+            <div class="stats-grid" style="margin-top:10px">
+              <div class="stat mss"><b id="stMss">0.000</b><span data-i18n="pg.mss">stability MSS</span></div>
+              <div class="stat"><b id="stRet">1.00</b><span data-i18n="pg.ret">retention</span></div>
+              <div class="stat"><b id="stCells">0</b><span data-i18n="pg.cells">cells</span></div>
+              <div class="stat"><b id="stInhib">0</b><span data-i18n="pg.inhib">inhibitory links</span></div>
+            </div>
+          </div>
+          <div>
+            <h4 data-i18n="pg.resT">Last recall — ranked</h4>
+            <div id="results" style="margin-top:10px"><span id="emptyRes" data-i18n="pg.empty">No recall yet. Press Recall — or Play the story.</span></div>
+          </div>
+          <p class="hint" data-i18n="pg.hint">Tip: click anywhere on the field to plant a memory there. Click a cell to select it, then Validate truth.</p>
+        </aside>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ DREAM ============ -->
+<section id="dream">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="eyebrow" data-i18n="dr.eyebrow">Sleep consolidation</span>
+      <h2 data-i18n="dr.title">At night, the field dreams.</h2>
+      <p data-i18n="dr.sub">An offline consolidator — run it like a cron at 3 a.m. — clusters redundant episodic memories and fuses each cluster into one semantic node, in a single atomic transaction. Then the spectral field is rebuilt over the new space.</p>
+    </div>
+    <div class="flow rv">
+      <div class="fstep"><span class="fnum">REM·1</span><h3 data-i18n="dr.1t">Cluster</h3><p data-i18n="dr.1p">Greedy cosine clustering (θ≈0.83) groups episodic NEUTRAL memories that say the same thing.</p></div>
+      <div class="fstep"><span class="fnum">REM·2</span><h3 data-i18n="dr.2t">Merge</h3><p data-i18n="dr.2p">Recall-weighted centroid embedding + extractive summary. The memories the agent actually used weigh more.</p></div>
+      <div class="fstep"><span class="fnum">REM·3</span><h3 data-i18n="dr.3t">Commit atomically</h3><p data-i18n="dr.3p">Insert node, delete sources, cascade links — one BEGIN IMMEDIATE transaction. A crash can never duplicate the past.</p></div>
+      <div class="fstep"><span class="fnum">WAKE</span><h3 data-i18n="dr.4t">Re-tune the cavity</h3><p data-i18n="dr.4p">The SVD spectral field is rebuilt over the consolidated space: the agent wakes with sharper eigen-modes.</p></div>
+    </div>
+    <p class="dream-note rv" data-i18n-html="dr.note">Episodic and semantic memories share one spectral field — deliberately. Dreaming migrates clusters across layers, and the consolidated structure should shape how new experience resonates. <em>The cavity is one.</em></p>
+  </div>
+</section>
+
+<!-- ============ AUDIT ============ -->
+<section id="audit">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="eyebrow" data-i18n="au.eyebrow">Forensic layer</span>
+      <h2 data-i18n="au.title">Every recall leaves a scar you can verify.</h2>
+      <p data-i18n="au.sub">Recalls, consolidations — every operation is chained with SHA-256 over its full payload, including the content hash of each retrieved memory. Click any block below to tamper with it, then verify.</p>
+    </div>
+    <div class="chain-wrap rv">
+      <div class="chain" id="chain"></div>
+      <div class="chain-controls">
+        <button class="pbtn" id="bVerify" data-i18n="au.verify">Verify chain</button>
+        <button class="pbtn" id="bHeal" data-i18n="au.heal">Restore original log</button>
+        <span id="chainVerdict" data-i18n="au.idle">Chain not verified yet</span>
+      </div>
+      <p class="hint" style="border:0;margin-top:14px" data-i18n="au.note">This widget mirrors the production scheme exactly: hash = SHA-256(canonical payload + prev_hash), where the payload carries each retrieved memory's content hash. Tampering edits the memory content inside a block — recomputation then fails, just like editing a row in the real SQLite audit log.</p>
+    </div>
+    <div class="audit-cols rv">
+      <div class="acard">
+        <h3 data-i18n="au.c1t">Stylometric forensics</h3>
+        <p data-i18n="au.c1p">Each memory carries its author's writing fingerprint: function-word frequencies, sentence rhythm, punctuation density — language-aware (ES/EN). A memory whose style breaks from its claimed author is degraded to FORGOTTEN and an alert is raised. A bilingual author switching languages is never flagged.</p>
+      </div>
+      <div class="acard">
+        <h3 data-i18n="au.c2t">No silent degradation</h3>
+        <p data-i18n="au.c2p">Embeddings fall back three tiers: local model → Qwen API (with retries) → deterministic dummy. The dummy tier screams: <code>SEMANTIC QUALITY DEGRADED</code> in the logs, <code>degraded: true</code> in /health and in every response. The agent always knows what its memory is made of.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ NUMBERS / STACK ============ -->
+<section id="stack">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="eyebrow" data-i18n="st.eyebrow">Engineering, not vibes</span>
+      <h2 data-i18n="st.title">Audited without mercy. Then fixed.</h2>
+      <p data-i18n="st.sub">A 55-finding internal audit plus an external review, mapped fix-by-fix: tamper-evident audit chain made cryptographically recomputable, WAL-mode SQLite, atomic consolidation, authenticated WebSockets, rate limiting, dimension-validated tensors.</p>
+    </div>
+    <div class="numbers rv">
+      <div class="num cy"><b>17<i>/17</i></b><span data-i18n="st.n1">engine integration tests</span></div>
+      <div class="num cy"><b>11<i>/11</i></b><span data-i18n="st.n2">spectral tests, incl. cross-process determinism</span></div>
+      <div class="num gold"><b>20<i> P0</i></b><span data-i18n="st.n3">critical findings closed in v1.1</span></div>
+      <div class="num"><b>0</b><span data-i18n="st.n4">external JS dependencies on this page</span></div>
+    </div>
+    <div class="stack rv">
+      <span class="sbadge"><i>◆</i>Python 3.12</span>
+      <span class="sbadge"><i>◆</i>Qwen embeddings + LLM</span>
+      <span class="sbadge"><i>◆</i>FastAPI + WebSocket</span>
+      <span class="sbadge"><i>◆</i>SQLite · WAL</span>
+      <span class="sbadge"><i>◆</i>NumPy SVD</span>
+      <span class="sbadge"><i>◆</i>scikit-learn k-NN</span>
+      <span class="sbadge"><i>◆</i>SHA-256 audit chain</span>
+      <span class="sbadge"><i>◆</i>Apache 2.0</span>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot">
+    <div>
+      <span class="logo">
+        <svg width="24" height="24" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+          <path d="M3 19 C7 8 13 4 23 4 C19 7 18 9 17.5 11.5 L21 12 L16.5 13.5 C15 18 10 21 3 19 Z" fill="#E9ECF5"/>
+          <circle cx="18.2" cy="7.6" r="1" fill="#0A0D16"/>
+        </svg>
+        raven-memory
+      </span>
+      <p style="margin-top:12px;font-size:14.5px;max-width:380px" data-i18n="ft.tag">An adaptive memory substrate for agentic AI. Built by the VIGÍA AI Collective for the Qwen Cloud Hackathon.</p>
+    </div>
+    <div class="foot-meta">
+      <p><b data-i18n="ft.track">Track 1 — MemoryAgent</b></p>
+      <p data-i18n="ft.lic">Apache 2.0 · VIGÍA AI Collective · 2026</p>
+      <p style="margin-top:8px;font-size:13px;color:var(--plume-dim)" data-i18n="ft.made">Co-developed by Anna Tchijova & Claude / Qwen</p>
+    </div>
+  </div>
+</footer>
+
+<script>
+"use strict";
+/* ============================================================
+   i18n — EN / ZH dictionary. No storage APIs: in-memory only.
+   ============================================================ */
+const I18N = {
+en:{
+ "nav.field":"The field","nav.play":"Playground","nav.dream":"Dreaming","nav.audit":"Audit chain","nav.stack":"Stack",
+ "hero.eyebrow":"Qwen Cloud Hackathon · Track 1 — MemoryAgent",
+ "hero.title":"Memory is a <em>field</em>,<br>not a lookup table.",
+ "hero.sub":"raven-memory gives AI agents a living memory substrate: Voronoi geometry, ternary logic, spectral optics — with synapses that learn, contradictions that inhibit, and nights in which it dreams.",
+ "hero.cta1":"Play with the field","hero.cta2":"Read the architecture",
+ "legend.r":"REINFORCED — validated truth","legend.n":"NEUTRAL — open hypothesis","legend.f":"FORGOTTEN — silenced","legend.i":"inhibitory link",
+ "hud.mss":"stability (MSS)","hud.cells":"cells","hud.links":"inhibitory",
+ "prob.eyebrow":"Why a field","prob.title":"Flat vector search remembers everything — and learns nothing.",
+ "prob.sub":"Most agent memory is a cosine ranking over a static index. Every memory is equally true forever; contradictions live side by side; nothing consolidates. raven-memory replaces the index with a dynamical system.",
+ "prob.flat.t":"Flat vector store",
+ "prob.flat.1":"Similarity is the only signal — no notion of validation",
+ "prob.flat.2":"Contradictions are retrieved together, confidence-free",
+ "prob.flat.3":"The index only grows; old noise ranks like new truth",
+ "prob.flat.4":"Retrieval is stateless — recalling changes nothing",
+ "prob.field.t":"raven-memory field",
+ "prob.field.1":"Ternary states: REINFORCED truths outshine, FORGOTTEN noise goes dark",
+ "prob.field.2":"Contradictions auto-wire inhibitory links — validated memories silence rivals",
+ "prob.field.3":"Sleep consolidation merges episodic clusters into semantic nodes",
+ "prob.field.4":"Every recall is plastic: STDP strengthens co-activated synapses",
+ "phys.eyebrow":"Three borrowed physics","phys.title":"Geometry, logic, and light.",
+ "phys.sub":"Each memory lives in a spatial cell, carries a three-valued state, and resonates — or doesn't — with the spectral modes of the whole field.",
+ "phys.v.t":"Voronoi geometry",
+ "phys.v.p":"Embeddings seed a Voronoi tessellation: each memory owns a cell, and cell adjacency defines hops. Recall activates a neighborhood, decaying as e^(−0.15·hops) — relevance has a literal shape.",
+ "phys.t.t":"Ternary computing",
+ "phys.t.p":"States and links are three-valued. Memories are REINFORCED, NEUTRAL or FORGOTTEN; links are RESONANT, NEUTRAL or INHIBITORY. When a memory is validated, its inhibitory links silence contradictors: the field collapses around truth.",
+ "phys.s.t":"Spectral optics",
+ "phys.s.p":"An SVD over all active embeddings extracts the field's eigen-modes — properties of the cavity, not of any source. A query that projects onto strong modes resonates. Resonance and coherence ship as epistemic metadata, never as score hacks.",
+ "pg.eyebrow":"Interactive simulation — same rules as the Python engine","pg.title":"Touch the field.",
+ "pg.sub":"This widget reimplements the engine's <em>rules</em> in the browser — ternary states, hop-decay recall, auto-inhibition, cluster-and-merge — so you can feel the dynamics. The production engine (FastAPI · SQLite · SVD · STDP) runs in Python; the README and demo video show it end to end.",
+ "pg.play":"▶ Play the story","pg.store":"Store memory","pg.contra":"Inject contradiction","pg.reinforce":"Validate truth",
+ "pg.recall":"Recall","pg.sleep":"Sleep","pg.reset":"Reset",
+ "pg.statsT":"Field telemetry","pg.mss":"stability MSS","pg.ret":"retention","pg.cells":"cells","pg.inhib":"inhibitory links",
+ "pg.resT":"Last recall — ranked","pg.empty":"No recall yet. Press Recall — or Play the story.",
+ "pg.hint":"Tip: click anywhere on the field to plant a memory there. Click a cell to select it, then Validate truth.",
+ "dr.eyebrow":"Sleep consolidation","dr.title":"At night, the field dreams.",
+ "dr.sub":"An offline consolidator — run it like a cron at 3 a.m. — clusters redundant episodic memories and fuses each cluster into one semantic node, in a single atomic transaction. Then the spectral field is rebuilt over the new space.",
+ "dr.1t":"Cluster","dr.1p":"Greedy cosine clustering (θ≈0.83) groups episodic NEUTRAL memories that say the same thing.",
+ "dr.2t":"Merge","dr.2p":"Recall-weighted centroid embedding + extractive summary. The memories the agent actually used weigh more.",
+ "dr.3t":"Commit atomically","dr.3p":"Insert node, delete sources, cascade links — one BEGIN IMMEDIATE transaction. A crash can never duplicate the past.",
+ "dr.4t":"Re-tune the cavity","dr.4p":"The SVD spectral field is rebuilt over the consolidated space: the agent wakes with sharper eigen-modes.",
+ "dr.note":"Episodic and semantic memories share one spectral field — deliberately. Dreaming migrates clusters across layers, and the consolidated structure should shape how new experience resonates. <em>The cavity is one.</em>",
+ "au.eyebrow":"Forensic layer","au.title":"Every recall leaves a scar you can verify.",
+ "au.sub":"Recalls, consolidations — every operation is chained with SHA-256 over its full payload, including the content hash of each retrieved memory. Click any block below to tamper with it, then verify.",
+ "au.verify":"Verify chain","au.heal":"Restore original log","au.idle":"Chain not verified yet",
+ "au.ok":"CHAIN INTACT — every hash recomputes from stored data",
+ "au.bad":"TAMPER DETECTED — hash recomputation fails at the marked block",
+ "au.note":"This widget mirrors the production scheme exactly: hash = SHA-256(canonical payload + prev_hash), where the payload carries each retrieved memory's content hash. Tampering edits the memory content inside a block — recomputation then fails, just like editing a row in the real SQLite audit log.",
+ "au.c1t":"Stylometric forensics",
+ "au.c1p":"Each memory carries its author's writing fingerprint: function-word frequencies, sentence rhythm, punctuation density — language-aware (ES/EN). A memory whose style breaks from its claimed author is degraded to FORGOTTEN and an alert is raised. A bilingual author switching languages is never flagged.",
+ "au.c2t":"No silent degradation",
+ "au.c2p":"Embeddings fall back three tiers: local model → Qwen API (with retries) → deterministic dummy. The dummy tier screams: SEMANTIC QUALITY DEGRADED in the logs, degraded: true in /health and in every response. The agent always knows what its memory is made of.",
+ "st.eyebrow":"Engineering, not vibes","st.title":"Audited without mercy. Then fixed.",
+ "st.sub":"A 55-finding internal audit plus an external review, mapped fix-by-fix: tamper-evident audit chain made cryptographically recomputable, WAL-mode SQLite, atomic consolidation, authenticated WebSockets, rate limiting, dimension-validated tensors.",
+ "st.n1":"engine integration tests","st.n2":"spectral tests, incl. cross-process determinism",
+ "st.n3":"critical findings closed in v1.1","st.n4":"external JS dependencies on this page",
+ "ft.tag":"An adaptive memory substrate for agentic AI. Built by the VIGÍA AI Collective for the Qwen Cloud Hackathon.",
+ "ft.track":"Track 1 — MemoryAgent","ft.lic":"Apache 2.0 · VIGÍA AI Collective · 2026",
+ "ft.made":"Co-developed by Anna Tchijova & Claude / Qwen",
+ // scenario captions
+ "sc.1":"The agent learns. Five episodic memories arrive — all NEUTRAL hypotheses, each claiming its own Voronoi cell.",
+ "sc.2":"A contradiction arrives on the same topic. The field auto-wires an INHIBITORY link between the rival claims.",
+ "sc.3":"Recall, before validation: both versions surface side by side. The agent sees the conflict — honestly.",
+ "sc.4":"A human validates the original claim → REINFORCED. Gold means: confirmed against the world.",
+ "sc.5":"Recall again: the reinforced truth shines ×1.5 — and its inhibitory link silences the contradiction. The field collapses around truth.",
+ "sc.6":"Night falls. The consolidator clusters redundant episodic memories and fuses them into one semantic node — atomically.",
+ "sc.7":"Morning. Fewer, denser memories; a re-tuned spectral cavity; an intact audit chain below. This is a memory that learned.",
+ "sc.step":"SCENARIO",
+ "mem.fact":"User prefers spectral recall",
+ "mem.contra":"Contradiction: claims the opposite",
+ "mem.cons":"Consolidated semantic node",
+},
+zh:{
+ "nav.field":"记忆场","nav.play":"互动演示","nav.dream":"做梦","nav.audit":"审计链","nav.stack":"技术栈",
+ "hero.eyebrow":"通义千问云端黑客松 · 赛道一 — MemoryAgent",
+ "hero.title":"记忆是一片<em>场</em>，<br>而不是一张查找表。",
+ "hero.sub":"raven-memory 为 AI 智能体提供一个活的记忆基底：沃罗诺伊几何、三值逻辑、谱光学——突触会学习，矛盾会抑制，而到了夜里，它会做梦。",
+ "hero.cta1":"亲手触摸记忆场","hero.cta2":"阅读架构原理",
+ "legend.r":"REINFORCED — 已验证的真相","legend.n":"NEUTRAL — 开放的假设","legend.f":"FORGOTTEN — 已被静默","legend.i":"抑制链接",
+ "hud.mss":"稳定度 (MSS)","hud.cells":"单元","hud.links":"抑制链接",
+ "prob.eyebrow":"为什么需要一片场","prob.title":"扁平向量检索记住一切——却什么都学不会。",
+ "prob.sub":"大多数智能体记忆只是对静态索引做余弦排序：每条记忆永远同等为真，矛盾并排共存，没有任何东西被巩固。raven-memory 用一个动力学系统取代了索引。",
+ "prob.flat.t":"扁平向量存储",
+ "prob.flat.1":"相似度是唯一信号——没有“验证”这一概念",
+ "prob.flat.2":"矛盾会被一起检索出来，毫无置信度可言",
+ "prob.flat.3":"索引只增不减，旧噪声与新真相排名相同",
+ "prob.flat.4":"检索是无状态的——回忆不会改变任何东西",
+ "prob.field.t":"raven-memory 记忆场",
+ "prob.field.1":"三值状态：REINFORCED 的真相更亮，FORGOTTEN 的噪声熄灭",
+ "prob.field.2":"矛盾自动接上抑制链接——被验证的记忆会静默其对手",
+ "prob.field.3":"睡眠巩固将情景记忆簇融合为语义节点",
+ "prob.field.4":"每次回忆都具可塑性：STDP 强化共激活的突触",
+ "phys.eyebrow":"借自物理的三种语言","phys.title":"几何、逻辑与光。",
+ "phys.sub":"每条记忆栖居在一个空间单元里，携带三值状态，并与整个场的谱模式发生——或不发生——共振。",
+ "phys.v.t":"沃罗诺伊几何",
+ "phys.v.p":"嵌入向量播种出一张沃罗诺伊镶嵌图：每条记忆拥有自己的单元，单元的相邻关系定义“跳数”。回忆激活一个邻域，按 e^(−0.15·hops) 衰减——相关性拥有真实的形状。",
+ "phys.t.t":"三值计算",
+ "phys.t.p":"状态与链接皆为三值。记忆是 REINFORCED、NEUTRAL 或 FORGOTTEN；链接是 RESONANT、NEUTRAL 或 INHIBITORY。一旦记忆被验证，其抑制链接将静默矛盾者：整个场向真相坍缩。",
+ "phys.s.t":"谱光学",
+ "phys.s.p":"对全部活跃嵌入做 SVD，提取记忆场的本征模——它们是腔体的属性，而非任何单个光源的属性。投影到强模式上的查询会产生共振。共振与相干度作为认识论元数据输出，绝不掺入评分黑箱。",
+ "pg.eyebrow":"交互式模拟 — 与 Python 引擎规则一致","pg.title":"亲手触摸这片场。",
+ "pg.sub":"此组件在浏览器中重新实现了引擎的<em>规则</em>——三值状态、跳数衰减回忆、自动抑制、聚簇与融合——让你亲身感受其动力学。真正的生产引擎（FastAPI · SQLite · SVD · STDP）运行在 Python 中；README 与演示视频会完整展示它。",
+ "pg.play":"▶ 播放完整故事","pg.store":"存入记忆","pg.contra":"注入矛盾","pg.reinforce":"验证真相",
+ "pg.recall":"回忆","pg.sleep":"入睡","pg.reset":"重置",
+ "pg.statsT":"记忆场遥测","pg.mss":"稳定度 MSS","pg.ret":"留存率","pg.cells":"单元","pg.inhib":"抑制链接",
+ "pg.resT":"最近一次回忆 — 排序结果","pg.empty":"尚无回忆。点击“回忆”——或播放完整故事。",
+ "pg.hint":"提示：点击场内任意位置即可在那里种下一条记忆。点击某个单元选中它，再点“验证真相”。",
+ "dr.eyebrow":"睡眠巩固","dr.title":"到了夜里，记忆场开始做梦。",
+ "dr.sub":"一个离线巩固器——像凌晨三点的 cron 一样运行——将冗余的情景记忆聚簇，并在单个原子事务中把每个簇融合为一个语义节点。随后在新的空间上重建谱场。",
+ "dr.1t":"聚簇","dr.1p":"贪心余弦聚类（θ≈0.83）把说着同一件事的情景 NEUTRAL 记忆归为一组。",
+ "dr.2t":"融合","dr.2p":"按回忆次数加权的质心嵌入 + 抽取式摘要。智能体真正用过的记忆权重更高。",
+ "dr.3t":"原子提交","dr.3p":"插入节点、删除来源、级联清理链接——全部在一个 BEGIN IMMEDIATE 事务中。崩溃永远无法复制过去。",
+ "dr.4t":"重调腔体","dr.4p":"在巩固后的空间上重建 SVD 谱场：智能体醒来时，拥有更锐利的本征模。",
+ "dr.note":"情景记忆与语义记忆共享同一个谱场——这是刻意的设计。做梦让记忆簇跨层迁移，巩固后的结构理应塑造新经验的共振方式。<em>腔体只有一个。</em>",
+ "au.eyebrow":"取证层","au.title":"每一次回忆都留下可验证的痕迹。",
+ "au.sub":"回忆、巩固——每一次操作都以 SHA-256 链接，哈希覆盖完整载荷，包括每条被检索记忆的内容哈希。点击下方任意区块进行篡改，然后验证。",
+ "au.verify":"验证链","au.heal":"恢复原始日志","au.idle":"链尚未验证",
+ "au.ok":"链完整 — 每个哈希都能从存储数据重新计算",
+ "au.bad":"检测到篡改 — 标记区块的哈希重算失败",
+ "au.note":"此组件与生产方案完全一致：hash = SHA-256(规范化载荷 + prev_hash)，载荷中包含每条被检索记忆的内容哈希。篡改即修改区块内的记忆内容——随后哈希重算便会失败，与直接修改真实 SQLite 审计日志中的某一行如出一辙。",
+ "au.c1t":"文体学取证",
+ "au.c1p":"每条记忆携带其作者的写作指纹：虚词频率、句子节奏、标点密度——并具备语言感知（西/英）。文体与署名作者不符的记忆会被降级为 FORGOTTEN 并触发警报。双语作者切换语言时绝不会被误判。",
+ "au.c2t":"绝不无声降级",
+ "au.c2p":"嵌入服务三级回退：本地模型 → 通义千问 API（含重试）→ 确定性占位向量。占位层会大声示警：日志中输出 SEMANTIC QUALITY DEGRADED，/health 与每个响应中标注 degraded: true。智能体永远知道自己的记忆由什么构成。",
+ "st.eyebrow":"是工程，不是感觉","st.title":"经受无情审计，然后逐一修复。",
+ "st.sub":"55 项内部审计发现加一轮外部评审，逐项映射修复：审计链实现密码学可重算、SQLite WAL 模式、原子化巩固、带鉴权的 WebSocket、速率限制、张量维度校验。",
+ "st.n1":"引擎集成测试","st.n2":"谱模块测试（含跨进程确定性）",
+ "st.n3":"v1.1 关闭的严重（P0）问题","st.n4":"本页面的外部 JS 依赖",
+ "ft.tag":"面向智能体 AI 的自适应记忆基底。由 VIGÍA AI Collective 为通义千问云端黑客松构建。",
+ "ft.track":"赛道一 — MemoryAgent","ft.lic":"Apache 2.0 · VIGÍA AI Collective · 2026",
+ "ft.made":"由 Anna Tchijova 与 Claude / Qwen 共同开发",
+ "sc.1":"智能体在学习。五条情景记忆到来——全部是 NEUTRAL 假设，各自占据一个沃罗诺伊单元。",
+ "sc.2":"同一主题上出现了矛盾。记忆场自动在对立主张之间接上一条抑制链接。",
+ "sc.3":"验证前的回忆：两个版本并排浮现。智能体诚实地看见了冲突。",
+ "sc.4":"人类验证了原始主张 → REINFORCED。金色意味着：经世界确认。",
+ "sc.5":"再次回忆：被强化的真相以 ×1.5 闪耀——它的抑制链接静默了矛盾。整个场向真相坍缩。",
+ "sc.6":"夜幕降临。巩固器将冗余的情景记忆聚簇，并原子地融合为一个语义节点。",
+ "sc.7":"清晨。记忆更少、更致密；谱腔被重新调谐；下方的审计链完好无损。这是一段学会了学习的记忆。",
+ "sc.step":"剧情",
+ "mem.fact":"用户偏好谱回忆",
+ "mem.contra":"矛盾：主张相反",
+ "mem.cons":"已巩固的语义节点",
+}
+};
+let LANG = "en";
+function t(k){ return (I18N[LANG][k] !== undefined ? I18N[LANG][k] : I18N.en[k]) || k; }
+function applyLang(lang){
+  LANG = lang;
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-i18n]").forEach(el=>{ el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll("[data-i18n-html]").forEach(el=>{ el.innerHTML = t(el.dataset.i18nHtml); });
+  document.getElementById("btnEn").classList.toggle("active", lang==="en");
+  document.getElementById("btnZh").classList.toggle("active", lang==="zh");
+  document.getElementById("btnEn").setAttribute("aria-pressed", lang==="en");
+  document.getElementById("btnZh").setAttribute("aria-pressed", lang==="zh");
+  document.title = lang==="zh" ? "raven-memory — 会做梦的记忆场" : "raven-memory — a memory field that dreams";
+  // Re-translate dynamic widgets that aren't driven by data-i18n attributes.
+  if(typeof setVerdict==="function" && typeof _lastVerdict!=="undefined") setVerdict(_lastVerdict);
+  if(typeof renderChain==="function" && Array.isArray(auditLog)) renderChain();
+}
+document.getElementById("btnEn").addEventListener("click",()=>applyLang("en"));
+document.getElementById("btnZh").addEventListener("click",()=>applyLang("zh"));
+
+/* ============================================================
+   Memory field engine — dependency-free Voronoi via low-res
+   nearest-seed rasterisation. Mirrors the real engine's rules:
+   ternary states, hop decay e^(−0.15·h), inhibition by
+   REINFORCED neighbors, sleep consolidation of NEUTRAL clusters.
+   ============================================================ */
+const COLORS = {
+  R:{fill:[233,185,77], glow:"rgba(233,185,77,.55)"},
+  N:{fill:[52,63,92]},
+  F:{fill:[22,28,46]},
+  SEM:{fill:[139,124,246]},
+};
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+class Field {
+  constructor(canvas, opts={}){
+    this.cv = canvas;
+    this.cx = canvas.getContext("2d");
+    this.interactive = !!opts.interactive;
+    this.res = opts.res || 5;           // raster cell size in px
+    this.mems = [];                      // {id,x,y,vx,vy,state,layer,topic,claim,label,recalls,born}
+    this.links = [];                     // {a,b,type:'INH'|'RES'}
+    this.pulses = [];                    // visual effects
+    this.flashes = new Map();            // id -> {color,until}
+    this.selected = null;
+    this.nextId = 1;
+    this.adj = new Map();
+    this._raf = null;
+    this._visible = true;
+    this.onChange = opts.onChange || (()=>{});
+    this._resize();
+    window.addEventListener("resize", ()=>this._resize());
+    if(this.interactive){
+      canvas.addEventListener("click", e=>this._click(e));
+    }
+    const io = new IntersectionObserver(es=>{ this._visible = es[0].isIntersecting; });
+    io.observe(canvas);
+    this._loop = this._loop.bind(this);
+    requestAnimationFrame(this._loop);
+  }
+  _resize(){
+    const r = this.cv.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio||1, 2);
+    this.w = Math.max(300, r.width); this.h = Math.max(300, r.height);
+    this.cv.width = this.w*dpr; this.cv.height = this.h*dpr;
+    this.cx.setTransform(dpr,0,0,dpr,0,0);
+    this.cols = Math.ceil(this.w/this.res); this.rows = Math.ceil(this.h/this.res);
+    this.nearest = new Int16Array(this.cols*this.rows);
+    this.off = document.createElement("canvas");
+    this.off.width = this.cols; this.off.height = this.rows;
+    this.ocx = this.off.getContext("2d");
+    this.img = this.ocx.createImageData(this.cols, this.rows);
+  }
+  addMem(o){
+    const m = Object.assign({
+      id:this.nextId++, x:30+Math.random()*(this.w-60), y:30+Math.random()*(this.h-60),
+      vx:(Math.random()-.5)*.12, vy:(Math.random()-.5)*.12,
+      state:"N", layer:"episodic", topic:null, claim:null,
+      label:t("mem.fact"), recalls:0, born:performance.now(), scale:0
+    }, o);
+    this.mems.push(m);
+    // auto inhibitory wiring on contradicting claims (mirrors _auto_link_contradictions)
+    if(m.topic && m.claim){
+      for(const o2 of this.mems){
+        if(o2.id!==m.id && o2.topic===m.topic && o2.claim && o2.claim!==m.claim){
+          if(!this.links.some(l=>(l.a===m.id&&l.b===o2.id)||(l.a===o2.id&&l.b===m.id))){
+            this.links.push({a:m.id,b:o2.id,type:"INH"});
+          }
+        }
+      }
+    }
+    this.onChange(); return m;
+  }
+  byId(id){ return this.mems.find(m=>m.id===id); }
+  setState(id, s){ const m=this.byId(id); if(m){ m.state=s; this.flash(id, s==="R"?"gold":"cyan"); this.onChange(); } }
+  flash(id, color){ this.flashes.set(id,{color,until:performance.now()+900}); }
+  stats(){
+    const live = this.mems.filter(m=>m.state!=="F");
+    const r = live.filter(m=>m.state==="R").length;
+    const n = live.filter(m=>m.state==="N").length;
+    const w = r*1.5+n;
+    return {
+      mss: w>0 ? (r*1.5)/w : 0,
+      retention: this.mems.length? live.length/this.mems.length : 1,
+      cells: this.mems.length,
+      inhib: this.links.filter(l=>l.type==="INH").length,
+    };
+  }
+  /* -------- recall: nearest cell + BFS hops + ternary boosts + inhibition -------- */
+  recall(qx, qy){
+    if(!this.mems.length) return {results:[],silenced:[]};
+    let best=-1,bd=1e12;
+    this.mems.forEach((m,i)=>{ const d=(m.x-qx)**2+(m.y-qy)**2; if(d<bd){bd=d;best=i;} });
+    const start = this.mems[best].id;
+    // BFS over Voronoi adjacency (this.adj computed during raster pass)
+    const hops = new Map([[start,0]]);
+    let frontier=[start];
+    for(let h=1;h<=2;h++){
+      const nf=[];
+      for(const id of frontier) for(const nb of (this.adj.get(id)||[]))
+        if(!hops.has(nb)){ hops.set(nb,h); nf.push(nb); }
+      frontier=nf;
+    }
+    const maxD = Math.hypot(this.w,this.h);
+    const boost = {R:1.5,N:1.0,F:0.1};
+    const cands=[];
+    for(const [id,h] of hops){
+      const m=this.byId(id); if(!m) continue;
+      const sim = Math.max(0, 1 - Math.hypot(m.x-qx,m.y-qy)/(maxD*0.55));
+      const score = sim * boost[m.state] * Math.exp(-0.15*h);
+      cands.push({m, h, score});
+    }
+    // inhibition: a candidate linked INH to an activated REINFORCED cell is silenced
+    const actIds = new Set(cands.map(c=>c.m.id));
+    const silenced=[];
+    const results = cands.filter(c=>{
+      if(c.m.state==="R") return true;
+      const inhibitor = this.links.some(l=> l.type==="INH" &&
+        ((l.a===c.m.id && actIds.has(l.b) && this.byId(l.b)?.state==="R") ||
+         (l.b===c.m.id && actIds.has(l.a) && this.byId(l.a)?.state==="R")));
+      if(inhibitor){ silenced.push(c); return false; }
+      return true;
+    }).filter(c=>c.m.state!=="F");
+    results.sort((a,b)=>b.score-a.score);
+    results.forEach(c=>{ c.m.recalls++; this.flash(c.m.id,"cyan"); });
+    silenced.forEach(c=>this.flash(c.m.id,"ember"));
+    this.pulses.push({x:qx,y:qy,r:6,max:Math.max(this.w,this.h)*0.5,born:performance.now()});
+    this.onChange();
+    return {results:results.slice(0,6), silenced};
+  }
+  /* -------- sleep: cluster NEUTRAL episodic cells, animate merge -------- */
+  sleep(done){
+    const cand = this.mems.filter(m=>m.state==="N" && m.layer==="episodic");
+    const groups=[]; const used=new Set();
+    for(const m of cand){
+      if(used.has(m.id)) continue;
+      const g=[m]; used.add(m.id);
+      for(const o of cand){
+        if(used.has(o.id)) continue;
+        if(Math.hypot(m.x-o.x,m.y-o.y) < Math.min(this.w,this.h)*0.24){ g.push(o); used.add(o.id); }
+      }
+      if(g.length>=2) groups.push(g);
+    }
+    if(!groups.length){ if(done) done(0); return 0; }
+    this.night = {start:performance.now(), dur:2200};
+    for(const g of groups){
+      const cx0 = g.reduce((s,m)=>s+m.x,0)/g.length, cy0 = g.reduce((s,m)=>s+m.y,0)/g.length;
+      g.forEach(m=>{ m.mergeTo={x:cx0,y:cy0,start:performance.now()+300,dur:1200}; });
+      setTimeout(()=>{
+        const ids = new Set(g.map(m=>m.id));
+        this.links = this.links.filter(l=>!ids.has(l.a)&&!ids.has(l.b));   // cascade
+        this.mems = this.mems.filter(m=>!ids.has(m.id));
+        this.addMem({x:cx0,y:cy0,state:"N",layer:"semantic",label:t("mem.cons"),
+          topic:g[0].topic, claim:g[0].claim});
+        this.onChange();
+      }, 1650);
+    }
+    if(done) setTimeout(()=>done(groups.length), 2100);
+    return groups.length;
+  }
+  reset(){ this.mems=[]; this.links=[]; this.pulses=[]; this.flashes.clear(); this.selected=null; this.nextId=1; this.onChange(); }
+  _click(e){
+    const r=this.cv.getBoundingClientRect();
+    const x=e.clientX-r.left, y=e.clientY-r.top;
+    // select if close to an existing seed, otherwise plant a new memory
+    let hit=null;
+    for(const m of this.mems) if(Math.hypot(m.x-x,m.y-y)<22) hit=m;
+    if(hit){ this.selected = (this.selected===hit.id? null : hit.id); }
+    else this.addMem({x,y,label:t("mem.fact")});
+  }
+  /* -------- render -------- */
+  _loop(now){
+    requestAnimationFrame(this._loop);
+    if(!this._visible) return;
+    const {cx,w,h}=this;
+    // drift
+    if(!reduceMotion){
+      for(const m of this.mems){
+        if(m.mergeTo){
+          const k=Math.min(1,Math.max(0,(now-m.mergeTo.start)/m.mergeTo.dur));
+          const e=k*k*(3-2*k);
+          m.x += (m.mergeTo.x-m.x)*e*0.18; m.y += (m.mergeTo.y-m.y)*e*0.18;
+        } else {
+          m.x+=m.vx; m.y+=m.vy;
+          if(m.x<24||m.x>w-24) m.vx*=-1;
+          if(m.y<24||m.y>h-24) m.vy*=-1;
+        }
+        if(m.scale<1) m.scale=Math.min(1,m.scale+0.06);
+      }
+    } else { for(const m of this.mems) m.scale=1; }
+    this._raster(now);
+    cx.clearRect(0,0,w,h);
+    cx.imageSmoothingEnabled = true;
+    cx.drawImage(this.off,0,0,w,h);
+    this._drawLinks(now);
+    this._drawSeeds(now);
+    this._drawPulses(now);
+    this._drawNight(now);
+  }
+  _raster(now){
+    const {cols,rows,res,mems}=this;
+    const n=mems.length, data=this.img.data, nearest=this.nearest;
+    this.adj = new Map(mems.map(m=>[m.id,new Set()]));
+    if(!n){ data.fill(0); this.ocx.putImageData(this.img,0,0); return; }
+    const xs=new Float32Array(n), ys=new Float32Array(n);
+    for(let i=0;i<n;i++){ xs[i]=mems[i].x; ys[i]=mems[i].y; }
+    for(let gy=0; gy<rows; gy++){
+      const py=(gy+0.5)*res;
+      for(let gx=0; gx<cols; gx++){
+        const px=(gx+0.5)*res;
+        let bi=0, bd=1e12;
+        for(let i=0;i<n;i++){
+          const dx=xs[i]-px, dy=ys[i]-py, d=dx*dx+dy*dy;
+          if(d<bd){bd=d;bi=i;}
+        }
+        const idx=gy*cols+gx;
+        nearest[idx]=bi;
+        // adjacency from raster neighbors
+        if(gx>0){ const l=nearest[idx-1]; if(l!==bi){ this.adj.get(mems[bi].id).add(mems[l].id); this.adj.get(mems[l].id).add(mems[bi].id); } }
+        if(gy>0){ const u=nearest[idx-cols]; if(u!==bi){ this.adj.get(mems[bi].id).add(mems[u].id); this.adj.get(mems[u].id).add(mems[bi].id); } }
+        const m=mems[bi];
+        const base = m.layer==="semantic" ? COLORS.SEM.fill : COLORS[m.state].fill;
+        // breathing per-cell
+        const br = m.state==="R" ? 0.78+0.22*Math.sin(now/640 + m.id*1.7)
+                 : m.state==="F" ? 0.35
+                 : 0.55+0.12*Math.sin(now/900 + m.id*2.3);
+        const dist=Math.sqrt(bd), fall = Math.max(0.34, 1 - dist/(Math.min(this.w,this.h)*0.42));
+        const a = m.state==="F"? 0.5 : br*fall*m.scale;
+        const o=idx*4;
+        data[o]  = base[0]*a + 10*(1-a);
+        data[o+1]= base[1]*a + 13*(1-a);
+        data[o+2]= base[2]*a + 22*(1-a);
+        data[o+3]= 255;
+        // edge darkening
+        if(gx>0 && nearest[idx-1]!==bi){ data[o]=10;data[o+1]=13;data[o+2]=22; }
+      }
+    }
+    this.ocx.putImageData(this.img,0,0);
+  }
+  _drawLinks(now){
+    const cx=this.cx;
+    for(const l of this.links){
+      const a=this.byId(l.a), b=this.byId(l.b); if(!a||!b) continue;
+      cx.beginPath();
+      const mx=(a.x+b.x)/2, my=(a.y+b.y)/2 - 26;
+      cx.moveTo(a.x,a.y); cx.quadraticCurveTo(mx,my,b.x,b.y);
+      if(l.type==="INH"){
+        const p=0.55+0.45*Math.sin(now/300);
+        cx.strokeStyle=`rgba(226,96,78,${0.5*p+0.2})`; cx.setLineDash([5,5]);
+      } else { cx.strokeStyle="rgba(94,230,208,.5)"; cx.setLineDash([]); }
+      cx.lineWidth=1.5; cx.stroke(); cx.setLineDash([]);
+    }
+  }
+  _drawSeeds(now){
+    const cx=this.cx;
+    for(const m of this.mems){
+      const fl=this.flashes.get(m.id);
+      let ring=null;
+      if(fl){ if(now>fl.until) this.flashes.delete(m.id);
+        else ring = fl.color==="gold"?"rgba(233,185,77,.9)": fl.color==="ember"?"rgba(226,96,78,.9)":"rgba(94,230,208,.9)"; }
+      const R = (m.layer==="semantic"?7.5:5.5)*m.scale;
+      if(m.state==="R"){
+        cx.shadowColor=COLORS.R.glow; cx.shadowBlur=18;
+        cx.fillStyle="#F2CB6E";
+      } else if(m.layer==="semantic"){
+        cx.shadowColor="rgba(139,124,246,.5)"; cx.shadowBlur=12; cx.fillStyle="#A89BFA";
+      } else {
+        cx.shadowBlur=0;
+        cx.fillStyle = m.state==="F" ? "rgba(120,130,160,.35)" : "#7E8AA8";
+      }
+      cx.beginPath(); cx.arc(m.x,m.y,R,0,7); cx.fill(); cx.shadowBlur=0;
+      if(m.layer==="semantic"){ cx.strokeStyle="rgba(233,185,77,.8)"; cx.lineWidth=1.4;
+        cx.beginPath(); cx.arc(m.x,m.y,R+4.5,0,7); cx.stroke(); }
+      if(ring){ cx.strokeStyle=ring; cx.lineWidth=2;
+        const k=1-(fl.until-now)/900;
+        cx.beginPath(); cx.arc(m.x,m.y,R+5+k*16,0,7); cx.stroke(); }
+      if(this.interactive && this.selected===m.id){
+        cx.strokeStyle="rgba(233,236,245,.85)"; cx.lineWidth=1.6; cx.setLineDash([3,4]);
+        cx.beginPath(); cx.arc(m.x,m.y,R+8,0,7); cx.stroke(); cx.setLineDash([]);
+      }
+    }
+  }
+  _drawPulses(now){
+    const cx=this.cx;
+    this.pulses = this.pulses.filter(p=> now-p.born < 1100);
+    for(const p of this.pulses){
+      const k=(now-p.born)/1100, r=p.r+(p.max-p.r)*k;
+      cx.strokeStyle=`rgba(94,230,208,${0.55*(1-k)})`; cx.lineWidth=1.6;
+      cx.beginPath(); cx.arc(p.x,p.y,r,0,7); cx.stroke();
+    }
+  }
+  _drawNight(now){
+    if(!this.night) return;
+    const k=(now-this.night.start)/this.night.dur;
+    if(k>=1){ this.night=null; return; }
+    const a = k<0.4? k/0.4 : k>0.75? (1-k)/0.25 : 1;
+    const cx=this.cx;
+    cx.fillStyle=`rgba(6,8,16,${0.55*a})`; cx.fillRect(0,0,this.w,this.h);
+    cx.fillStyle=`rgba(233,236,245,${0.85*a})`;
+    cx.font="22px serif"; cx.fillText("☾", this.w-46, 40);
+    for(let i=0;i<14;i++){
+      const sx=(i*97)%this.w, sy=(i*53)%Math.max(1,(this.h*0.5));
+      cx.fillStyle=`rgba(233,236,245,${(0.25+0.5*Math.abs(Math.sin(now/500+i)))*a})`;
+      cx.fillRect(sx,sy,1.6,1.6);
+    }
+  }
+}
+
+/* ============================================================
+   HERO ambient field
+   ============================================================ */
+const hero = new Field(document.getElementById("heroField"), {res:6, onChange(){}});
+(function seedHero(){
+  const W=()=>hero.w, H=()=>hero.h;
+  for(let i=0;i<22;i++) hero.addMem({x:Math.random()*W(), y:Math.random()*H(), state:"N"});
+  [3,9,15].forEach(i=>{ if(hero.mems[i]) hero.mems[i].state="R"; });
+  [6,18].forEach(i=>{ if(hero.mems[i]) hero.mems[i].state="F"; });
+  if(hero.mems[3]&&hero.mems[6]) hero.links.push({a:hero.mems[3].id,b:hero.mems[6].id,type:"INH"});
+  if(hero.mems[9]&&hero.mems[18]) hero.links.push({a:hero.mems[9].id,b:hero.mems[18].id,type:"INH"});
+  const hud=()=>{ const s=hero.stats();
+    document.getElementById("hudMss").textContent=s.mss.toFixed(3);
+    document.getElementById("hudCells").textContent=s.cells;
+    document.getElementById("hudLinks").textContent=s.inhib; };
+  hud();
+  if(!reduceMotion) setInterval(()=>{ if(hero._visible){ hero.recall(Math.random()*W(), Math.random()*H()); hud(); } }, 5200);
+})();
+
+/* ============================================================
+   PLAYGROUND
+   ============================================================ */
+const stEls = {mss:stMss, ret:stRet, cells:stCells, inhib:stInhib};
+const pg = new Field(document.getElementById("fieldCanvas"), {interactive:true, res:5, onChange(){
+  const s=pg.stats();
+  stEls.mss.textContent=s.mss.toFixed(3);
+  stEls.ret.textContent=s.retention.toFixed(2);
+  stEls.cells.textContent=s.cells;
+  stEls.inhib.textContent=s.inhib;
+}});
+function renderResults(out){
+  const box=document.getElementById("results"); box.innerHTML="";
+  if(!out || (!out.results.length && !out.silenced.length)){
+    box.innerHTML=`<span id="emptyRes">${t("pg.empty")}</span>`; return;
+  }
+  const maxS = Math.max(...out.results.map(r=>r.score), 0.001);
+  for(const r of out.results){
+    const d=document.createElement("div");
+    d.className="res"+(r.m.state==="R"?" rf":"");
+    d.innerHTML=`<span class="bar" style="width:${Math.max(4,90*r.score/maxS)}px"></span>
+      <span class="lbl">${r.m.label}</span><span class="sc">${r.score.toFixed(3)}·h${r.h}</span>`;
+    box.appendChild(d);
+  }
+  for(const r of out.silenced){
+    const d=document.createElement("div"); d.className="res silenced";
+    d.innerHTML=`<span class="bar" style="width:30px"></span>
+      <span class="lbl">${r.m.label}</span><span class="sc">INH</span>`;
+    box.appendChild(d);
+  }
+}
+function pgSeed(){
+  pg.reset();
+  for(let i=0;i<4;i++) pg.addMem({label:t("mem.fact")+" #"+(i+1), topic:"pref", claim: i===0?"A":null});
+}
+pgSeed();
+document.getElementById("bStore").onclick=()=> pg.addMem({label:t("mem.fact")+" #"+pg.nextId});
+document.getElementById("bContra").onclick=()=>{
+  const target = pg.mems.find(m=>m.claim==="A") || pg.mems[0];
+  if(!target) return;
+  if(!target.claim){ target.claim="A"; target.topic="pref"; }
+  pg.addMem({label:t("mem.contra"), topic:target.topic, claim:"NOT_A",
+    x:Math.min(pg.w-40, target.x+90+Math.random()*60), y:Math.max(40, target.y-60+Math.random()*120)});
+};
+document.getElementById("bReinforce").onclick=()=>{
+  const id = pg.selected || (pg.mems.find(m=>m.claim==="A")||pg.mems[0]||{}).id;
+  if(id) pg.setState(id,"R");
+};
+document.getElementById("bRecall").onclick=()=>{
+  const q = pg.byId(pg.selected) || pg.mems[0];
+  const out = pg.recall(q? q.x+30 : pg.w/2, q? q.y+20 : pg.h/2);
+  renderResults(out); chainAppend("recall");
+};
+document.getElementById("bSleep").onclick=()=>{ pg.sleep(n=>{ if(n>0) chainAppend("consolidation"); }); };
+document.getElementById("bReset").onclick=()=>{ pgSeed(); renderResults(null); };
+
+/* ---- scripted scenario ---- */
+const capEl=document.getElementById("caption"), capT=document.getElementById("capText"), capS=document.getElementById("capStep");
+let scenarioRunning=false;
+function caption(stepIdx, key, ms){
+  capS.textContent = `${t("sc.step")} ${stepIdx}/7`;
+  capT.textContent = t(key);
+  capEl.classList.add("show");
+  if(ms) setTimeout(()=>{ if(!scenarioRunning) capEl.classList.remove("show"); }, ms);
+}
+document.getElementById("bPlay").onclick=async ()=>{
+  if(scenarioRunning) return;
+  scenarioRunning=true;
+  const wait=ms=>new Promise(r=>setTimeout(r,ms));
+  const B=document.getElementById("bPlay"); B.disabled=true;
+  pg.reset(); renderResults(null);
+  document.getElementById("playground").scrollIntoView({behavior: reduceMotion?"auto":"smooth", block:"center"});
+  await wait(500);
+  // 1 — learn
+  caption(1,"sc.1");
+  let anchor=null;
+  for(let i=0;i<5;i++){
+    const m=pg.addMem({label:t("mem.fact")+" #"+(i+1), topic:"pref", claim: i===0?"A":null,
+      x: pg.w*0.22 + Math.random()*pg.w*0.34, y: pg.h*0.25 + Math.random()*pg.h*0.5});
+    if(i===0) anchor=m;
+    await wait(520);
+  }
+  await wait(1400);
+  // 2 — contradiction
+  caption(2,"sc.2");
+  const evil = pg.addMem({label:t("mem.contra"), topic:"pref", claim:"NOT_A",
+    x:Math.min(pg.w-50, anchor.x+pg.w*0.3), y:anchor.y});
+  await wait(2300);
+  // 3 — recall pre-validation
+  caption(3,"sc.3");
+  renderResults(pg.recall(anchor.x+20, anchor.y+10)); chainAppend("recall");
+  await wait(2700);
+  // 4 — validate
+  caption(4,"sc.4");
+  pg.setState(anchor.id,"R");
+  await wait(2300);
+  // 5 — collapse around truth
+  caption(5,"sc.5");
+  renderResults(pg.recall(anchor.x+20, anchor.y+10)); chainAppend("recall");
+  await wait(3000);
+  // 6 — dream
+  caption(6,"sc.6");
+  pg.sleep(n=>{ if(n>0) chainAppend("consolidation"); });
+  await wait(2700);
+  // 7 — wake
+  caption(7,"sc.7");
+  await wait(3600);
+  capEl.classList.remove("show");
+  scenarioRunning=false; B.disabled=false;
+};
+
+/* ============================================================
+   AUDIT CHAIN demo — real SHA-256 via SubtleCrypto, FNV fallback.
+   Blocks generated from playground operations.
+   ============================================================ */
+const enc = new TextEncoder();
+async function sha(s){
+  try{
+    const d = await crypto.subtle.digest("SHA-256", enc.encode(s));
+    return [...new Uint8Array(d)].map(b=>b.toString(16).padStart(2,"0")).join("");
+  }catch(_){
+    let h=0xcbf29ce484222325n; const P=0x100000001b3n;
+    for(const c of enc.encode(s)){ h^=BigInt(c); h=(h*P)&0xFFFFFFFFFFFFFFFFn; }
+    return h.toString(16).padStart(16,"0").repeat(4);
+  }
+}
+const GENESIS="0".repeat(64);
+let auditLog=[];   // {op, payload, prevHash, hash, tampered}
+// Mirror the production scheme: the hashed payload includes the content_hash
+// of each retrieved memory. Editing a memory's text therefore breaks hash
+// recomputation — exactly as in memory_engine.compute_audit_hash.
+async function memContentHash(label){ return (await sha(label)).slice(0,16); }
+async function chainAppend(op){
+  const prev = auditLog.length? auditLog[auditLog.length-1].hash : GENESIS;
+  // snapshot the live field's top cells as the "retrieved" set
+  const snap = pg.mems.slice(0,3).map(m=>m.label);
+  const results = [];
+  for(const lbl of snap) results.push({c:lbl, ch: await memContentHash(lbl)});
+  const payloadObj = {ts:Date.now(), op, n:auditLog.length+1, results};
+  const payload = JSON.stringify(payloadObj);
+  const hash = await sha(payload+prev);
+  auditLog.push({op, payload, prevHash:prev, hash, tampered:false});
+  if(auditLog.length>8) auditLog=auditLog.slice(-8);
+  renderChain();
+}
+function renderChain(marks={}){
+  const c=document.getElementById("chain"); c.innerHTML="";
+  auditLog.forEach((b,i)=>{
+    const d=document.createElement("div");
+    d.className="block"+(b.tampered?" tampered":"")+(marks[i]==="ok"?" ok":marks[i]==="bad"?" bad":"");
+    d.setAttribute("role","button"); d.tabIndex=0;
+    d.title = LANG==="zh" ? "点击篡改此区块（修改记忆内容）" : "Click to tamper (edits memory content)";
+    d.innerHTML=`<span class="op">${b.op}${b.tampered?" ⚠":""}</span>
+      <div class="h">${b.hash.slice(0,18)}…</div>
+      <div class="ph">prev ${b.prevHash.slice(0,14)}…</div>`;
+    // Tamper by editing the retrieved content INSIDE the payload — the content
+    // hash no longer matches, so verification must fail. This is the real
+    // attack the production chain defends against.
+    const tamper=()=>{ b.payload=b.payload.replace(/"c":"[^"]*"/, '"c":"FALSIFIED"'); b.tampered=true; renderChain(); setVerdict(null); };
+    d.addEventListener("click",tamper);
+    d.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();tamper();} });
+    c.appendChild(d);
+  });
+}
+let _lastVerdict = null;   // remember verdict so a language switch re-translates it
+function setVerdict(state){
+  _lastVerdict = state;
+  const v=document.getElementById("chainVerdict");
+  v.className= state===true?"ok": state===false?"bad":"";
+  v.textContent = state===true? t("au.ok") : state===false? t("au.bad") : t("au.idle");
+}
+document.getElementById("bVerify").onclick=async ()=>{
+  const marks={}; let ok=true;
+  for(let i=0;i<auditLog.length;i++){
+    const b=auditLog[i];
+    const linkOk = b.prevHash === (i===0? b.prevHash : auditLog[i-1].hash);
+    const recomputed = await sha(b.payload+b.prevHash);
+    const good = linkOk && recomputed===b.hash;
+    marks[i]= good? "ok":"bad"; if(!good) ok=false;
+  }
+  renderChain(marks); setVerdict(ok);
+};
+document.getElementById("bHeal").onclick=async ()=>{
+  const ops=auditLog.map(b=>b.op.replace("falsified","recall"));
+  auditLog=[];
+  for(const op of (ops.length?ops:["recall","recall","consolidation","recall"])) await chainAppend(op);
+  setVerdict(null);
+};
+(async function seedChain(){
+  for(const op of ["recall","recall","consolidation","recall"]) await chainAppend(op);
+})();
+
+/* ============================================================
+   scroll reveal
+   ============================================================ */
+const ro = new IntersectionObserver(es=>{
+  es.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add("in"); ro.unobserve(e.target);} });
+},{threshold:.12});
+document.querySelectorAll(".rv").forEach(el=>ro.observe(el));
+
+applyLang("en");
+</script>
+</body>
+</html>
