@@ -135,6 +135,18 @@ raven-memory/
 
 ---
 
+## Installation
+
+```bash
+git clone https://github.com/annatchijova/raven-memory.git
+cd raven-memory
+bash install.sh
+```
+
+`install.sh` creates a `.venv`, installs all dependencies (including torch and sentence-transformers), and prints the next steps. No API key required for offline use.
+
+---
+
 ## Quickstart
 
 ```bash
