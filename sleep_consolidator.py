@@ -84,8 +84,8 @@ def get_recall_counts(db_path: Path, memory_ids: List[str]) -> Dict[str, int]:
                 mid = item.get("memory_id", "")
                 if mid in counts:
                     counts[mid] += 1
-        except Exception:
-            pass
+        except Exception as _json_exc:
+            print(f"   [WARN] get_recall_counts: malformed memories_retrieved JSON — entry skipped. Error: {_json_exc}")
     return counts
 
 
