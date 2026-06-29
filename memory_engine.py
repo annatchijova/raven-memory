@@ -710,6 +710,27 @@ class MemoryStore:
             index.setdefault(from_id, []).append((to_id, LinkType[lt_str]))
         return index
 
+    def load_cell_links_for_cells(self, cell_ids: List[int]) -> List[Tuple[int, int, str]]:
+        """
+        Load cell links where BOTH endpoints are in the given set.
+        Used by export_graph() to avoid loading O(total_links) when max_nodes
+        truncates a large corpus.
+        """
+        if not cell_ids:
+            return []
+        with self._connect() as conn:
+            all_rows: List[Tuple[int, int, str]] = []
+            for i in range(0, len(cell_ids), 999):
+                chunk = cell_ids[i:i + 999]
+                ph = ",".join("?" * len(chunk))
+                rows = conn.execute(
+                    f"SELECT from_cell_id, to_cell_id, link_type FROM cell_links "
+                    f"WHERE from_cell_id IN ({ph}) AND to_cell_id IN ({ph})",
+                    chunk + chunk,
+                ).fetchall()
+                all_rows.extend((r[0], r[1], r[2]) for r in rows)
+        return all_rows
+
     def load_memories_by_ids(self, memory_ids: List[str]) -> List["MemoryEntry"]:
         """
         Batch load memories by ID in a single query.
@@ -1464,7 +1485,9 @@ class AdaptiveMemoryEngine:
             mems = sorted(mems, key=lambda m: m.recall_count, reverse=True)[:max_nodes]
 
         included = {m.cell_id for m in mems}
-        all_links = self._db.load_all_cell_links()
+        # Only load links between included cells — avoids O(total_links) load
+        # when max_nodes truncates a large corpus.
+        all_links = self._db.load_cell_links_for_cells(list(included))
 
         nodes = [
             {
