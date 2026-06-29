@@ -440,7 +440,8 @@ async def create_cell_link(req: CellLinkRequest):
     return {"from": req.from_cell_id, "to": req.to_cell_id, "type": lt.name}
 
 
-@app.get("/graph", tags=["graph"], summary="Export full memory graph (nodes + edges)")
+@app.get("/graph", tags=["graph"], summary="Export full memory graph (nodes + edges)",
+         dependencies=[Depends(require_token)])
 async def export_graph():
     eng = _get_engine()
     return eng.export_graph()
