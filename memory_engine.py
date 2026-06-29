@@ -790,6 +790,9 @@ class MemoryStore:
             return [ForensicAlert(**dict(r)) for r in rows]
 
     def get_prev_audit_hash(self) -> str:
+        # Always read from DB — the consolidator may have written since our
+        # last recall, and a cached value would break the audit chain.
+        self._load_prev_hash()
         return self._prev_audit_hash
 
     # ---- INTERNAL ----
