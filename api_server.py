@@ -237,18 +237,22 @@ async def _broadcast(event: str, data: Dict):
     if not ws_clients:
         return
     message = json.dumps({"event": event, "data": data, "ts": time.time()})
-    async with _ws_lock:  # P3-1: prevent concurrent modification
-        dead = []
-        for ws in list(ws_clients):
-            try:
-                # Bug #19: a single slow client must not stall the HTTP request
-                # that triggered the broadcast. Cap each send; on timeout the
-                # client is treated as dead and dropped.
-                await asyncio.wait_for(ws.send_text(message), timeout=2.0)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            ws_clients.remove(ws)
+    # Snapshot the client list under lock, then release before doing I/O.
+    async with _ws_lock:
+        snapshot = list(ws_clients)
+
+    dead = []
+    for ws in snapshot:
+        try:
+            await asyncio.wait_for(ws.send_text(message), timeout=2.0)
+        except Exception:
+            dead.append(ws)
+
+    if dead:
+        async with _ws_lock:
+            for ws in dead:
+                if ws in ws_clients:
+                    ws_clients.remove(ws)
 
 
 # ============================================================
