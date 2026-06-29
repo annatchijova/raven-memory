@@ -60,7 +60,7 @@ shallow — as the last.
 
 ```
 score = (cosine_sim × state_boost × exp(−λ·hop))
-      + resonant_boost
+      + resonant_boost × min(cosine_sim, 1.0)   ← escalada por similaridad
       + synaptic_weight × 0.3
       + exp(−ln2 · age / 24h) × 0.05
 ```
