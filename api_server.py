@@ -108,7 +108,13 @@ rate_limiter = SlidingWindowLimiter(RATE_LIMIT_PER_MIN)
 
 
 async def rate_limited(request: Request):
-    client = request.client.host if request.client else "unknown"
+    # Respect X-Forwarded-For when behind a reverse proxy (nginx, Cloudflare).
+    # Fall back to the TCP connection address only if the header is absent.
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        client = forwarded_for.split(",")[0].strip()
+    else:
+        client = request.client.host if request.client else "unknown"
     await rate_limiter.check(client)
 
 # ============================================================
