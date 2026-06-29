@@ -996,7 +996,7 @@ class AdaptiveMemoryEngine:
             raise ValueError("Embedding contains NaN or Inf values — cannot store corrupted vector")
 
         content_hash = hashlib.sha256(content.encode()).hexdigest()
-        memory_id = f"mem_{content_hash[:16]}_{int(time.time() * 1000)}"
+        memory_id = f"mem_{content_hash[:16]}_{int(time.time() * 1000)}_{self._next_cell_id}"
         cell_id = self._next_cell_id
         self._next_cell_id += 1
 
