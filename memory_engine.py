@@ -1166,6 +1166,8 @@ class AdaptiveMemoryEngine:
                             mismatch_score=dist,
                             action_taken="DEGRADED_TO_FORGOTTEN",
                         ))
+                        self._active_cells.discard(mem.cell_id)
+                        self._kdtree_dirty = True
                         f_estilo += 1
                         logger.warning(f"Forensic: tampered memory {mem.memory_id[:16]} → FORGOTTEN (dist={dist:.3f})")
                         continue
