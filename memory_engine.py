@@ -426,7 +426,7 @@ class MemoryStore:
                     content_hash TEXT NOT NULL,
                     embedding BLOB NOT NULL,
                     state TEXT NOT NULL,
-                    cell_id INTEGER NOT NULL,
+                    cell_id INTEGER NOT NULL UNIQUE,
                     created_at REAL NOT NULL,
                     session_id TEXT NOT NULL,
                     author_id TEXT NOT NULL,
@@ -484,6 +484,13 @@ class MemoryStore:
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_cell   ON memories(cell_id)")
+            # Migration: enforce UNIQUE on cell_id for DBs created before this constraint.
+            try:
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_mem_cell_id ON memories(cell_id)"
+                )
+            except sqlite3.OperationalError:
+                pass
             conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_layer  ON memories(layer)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_author ON memories(author_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_state  ON memories(state)")
