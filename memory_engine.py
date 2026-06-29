@@ -870,6 +870,8 @@ class AdaptiveMemoryEngine:
         # every store on a hot topic re-issued O(n) redundant INSERT OR REPLACE
         # writes per existing contradiction (O(n²) total per topic).
         self._linked_pairs: Set[Tuple[int, int, str]] = set()
+        # RESONANT neighbours for BFS hop-distance — keyed by from_cell_id.
+        self._resonant_neighbors: Dict[int, List[Tuple[int, LinkType]]] = {}
 
         self.stylometric = StylometricExtractor()
         self._author_fingerprints: Dict[str, StylometricFingerprint] = {}
@@ -904,6 +906,7 @@ class AdaptiveMemoryEngine:
         self._active_cells = set()
         self._topic_index = {}
         self._linked_pairs = set()
+        self._resonant_neighbors = {}
         self._next_cell_id = 0
 
         mems = self._db.load_memories()
@@ -932,8 +935,14 @@ class AdaptiveMemoryEngine:
         self._rebuild_kdtree()
 
         # P1: hydrate the linked-pairs cache so dedup survives restarts.
+        # Also populate _resonant_neighbors for BFS hop-distance via RESONANT links.
         for f, t, lt in self._db.load_all_cell_links():
-            self._linked_pairs.add((f, t, lt.name if hasattr(lt, 'name') else str(lt)))
+            lt_str = lt.name if hasattr(lt, 'name') else str(lt)
+            self._linked_pairs.add((f, t, lt_str))
+            if lt_str == "RESONANT":
+                lt_enum = LinkType[lt_str]
+                self._resonant_neighbors.setdefault(f, []).append((t, lt_enum))
+                self._resonant_neighbors.setdefault(t, []).append((f, lt_enum))
 
         logger.info(f"Loaded {len(mems)} memories, {len(self._points)} live cells from DB")
 
@@ -1384,7 +1393,10 @@ class AdaptiveMemoryEngine:
     def create_cell_link(self, from_cell_id: int, to_cell_id: int, link_type: LinkType):
         """Manually create a ternary cell link."""
         self._db.store_cell_link(from_cell_id, to_cell_id, link_type, auto=False)
-        self._linked_pairs.add((from_cell_id, to_cell_id))
+        self._linked_pairs.add((from_cell_id, to_cell_id, link_type.name))
+        if link_type == LinkType.RESONANT:
+            self._resonant_neighbors.setdefault(from_cell_id, []).append((to_cell_id, link_type))
+            self._resonant_neighbors.setdefault(to_cell_id, []).append((from_cell_id, link_type))
 
     # ----------------------------------------------------------
     # STATS & EXPORT
@@ -1564,12 +1576,20 @@ class AdaptiveMemoryEngine:
             hops += 1
             new_frontier: Set[int] = set()
             for cell in frontier:
+                # k-NN neighbors
                 for n in self.cell_neighbors.get(cell, set()):
                     if n == to_cell:
                         return hops
                     if n not in visited:
                         visited.add(n)
                         new_frontier.add(n)
+                # RESONANT cell_links — extend BFS through explicit links
+                for linked_cell, link_type in self._resonant_neighbors.get(cell, []):
+                    if linked_cell == to_cell:
+                        return hops
+                    if linked_cell not in visited:
+                        visited.add(linked_cell)
+                        new_frontier.add(linked_cell)
             frontier = new_frontier
         return -1  # unreachable
 
