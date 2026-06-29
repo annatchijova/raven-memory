@@ -232,7 +232,7 @@ Full fix map: [FIXES_v1.1.md](FIXES_v1.1.md)
 - **Embeddings**: `all-MiniLM-L6-v2` (local, offline) → Qwen API → deterministic SHA-256 dummy
 - **Storage**: SQLite with indices on `cell_id`, `layer`, `author_id`, `state`
 - **KDTree rebuild**: lazy (dirty flag) — not on every `store()`, only before `recall()`
-- **Fraction arithmetic**: synaptic weights and MSS use `fractions.Fraction` — zero float drift
+- **Float arithmetic**: synaptic weights and MSS use standard Python floats; no `fractions.Fraction` — reproducibility is not guaranteed bit-for-bit across platforms
 - **Persistence**: `_load_from_db()` reconstructs `_points` + topic index on engine restart
 - **sklearn compatibility**: `metric="precomputed"` + `cosine_distances()` avoids deprecated `affinity=` API
 
