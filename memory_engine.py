@@ -992,6 +992,8 @@ class AdaptiveMemoryEngine:
     ) -> MemoryEntry:
         if embedding.shape != (self.embedding_dim,):
             raise ValueError(f"Expected embedding dim {self.embedding_dim}, got {embedding.shape}")
+        if not np.isfinite(embedding).all():
+            raise ValueError("Embedding contains NaN or Inf values — cannot store corrupted vector")
 
         content_hash = hashlib.sha256(content.encode()).hexdigest()
         memory_id = f"mem_{content_hash[:16]}_{int(time.time() * 1000)}"
