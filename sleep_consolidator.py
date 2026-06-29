@@ -327,8 +327,15 @@ def log_consolidation(db_path: Path, processed: int, merged: int, created: int):
     # P0-5: chain consolidation into the existing audit log instead of
     # restarting with prev_hash="0"*64, which would break the forensic chain.
     if not _verify_chain_tail(db_path):
-        print("   ⚠️  AUDIT CHAIN BROKEN before this consolidation — "
-              "appending anyway, but run verify_audit_chain() and investigate.")
+        broken_msg = (
+            "AUDIT CHAIN BROKEN before this consolidation. "
+            "Appending consolidation entry — the break is still detectable via verify_audit_chain(). "
+            "Investigate before trusting this audit log in a forensic context."
+        )
+        print(f"   [CRITICAL] {broken_msg}", flush=True)
+        # Write the break as a structured entry so it survives log rotation.
+        import sys
+        print(f"   [CRITICAL] {broken_msg}", file=sys.stderr, flush=True)
 
     prev_hash = _get_last_audit_hash(db_path)
 
