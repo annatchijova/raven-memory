@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-RAVEN-MEMORY v1.0
+RAVEN-MEMORY v1.1
 Adaptive Memory Substrate for Agentic Systems
 Track 1: MemoryAgent — Qwen Cloud Hackathon
 
@@ -1666,4 +1666,4 @@ class AdaptiveMemoryEngine:
 
 
 if __name__ == "__main__":
-    print("raven-memory v1.0 — Engine OK")
+    print("raven-memory v1.1 — Engine OK")

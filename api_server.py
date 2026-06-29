@@ -169,7 +169,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="raven-memory API",
-    version="1.0.0",
+    version="1.1.0",
     description=(
         "Adaptive Memory Substrate — stateful, graph-based memory retrieval "
         "with ternary states, neighbourhood activation, and STDP dynamics."
