@@ -552,6 +552,10 @@ class MemoryStore:
                         entries = [e for e in entries if e.layer == layer]
                     if state:
                         entries = [e for e in entries if e.state.name == state]
+                    if offset:
+                        entries = entries[offset:]
+                    if limit:
+                        entries = entries[:limit]
                     return entries
             if author_id:
                 conditions.append("author_id = ?")
