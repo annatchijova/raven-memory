@@ -1365,6 +1365,11 @@ class AdaptiveMemoryEngine:
         # P0-1e: remove from active cells so KDTree excludes this ghost
         self._active_cells.discard(m.cell_id)
         self._kdtree_dirty = True
+        # Remove from topic index to prevent ghost contradictions
+        for topic, entries in list(self._topic_index.items()):
+            self._topic_index[topic] = [e for e in entries if e[1] != m.cell_id]
+            if not self._topic_index[topic]:
+                del self._topic_index[topic]
         logger.info(f"Forgotten: {memory_id}")
         return m
 
