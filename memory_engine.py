@@ -195,6 +195,7 @@ def compute_audit_hash(
     cells_activated: List[int],
     memories_retrieved,
     prev_hash: str,
+    query_embedding=None,
 ) -> str:
     """
     Canonical audit hash for the tamper-evident chain.
@@ -219,6 +220,9 @@ def compute_audit_hash(
             "query": query_text,
             "cells": cells_activated,
             "results": memories_retrieved,
+            "qemb_sha256": hashlib.sha256(
+                str(query_embedding).encode("utf-8") if query_embedding is not None else b""
+            ).hexdigest(),
         },
         sort_keys=True,
         ensure_ascii=False,
@@ -257,9 +261,11 @@ def verify_audit_chain(entries_desc: List[Dict]) -> Dict:
                 e["cells_activated"], str) else e["cells_activated"]
             results = json.loads(e["memories_retrieved"]) if isinstance(
                 e["memories_retrieved"], str) else e["memories_retrieved"]
+            qemb_stored = e.get("query_embedding")
+            qemb = json.loads(qemb_stored) if qemb_stored else None
             recomputed = compute_audit_hash(
                 e["timestamp"], e["operation"], e["query_text"],
-                cells, results, e["prev_hash"],
+                cells, results, e["prev_hash"], qemb,
             )
             if recomputed != e["audit_hash"]:
                 integrity_ok = False
@@ -1506,16 +1512,16 @@ class AdaptiveMemoryEngine:
             for r in results
         ]
 
-        audit_hash = compute_audit_hash(
-            ts, "recall", query_text, cells_sorted, mem_dicts, prev,
-        )
-
         # P0: .tolist() guard — query_embedding may arrive as ndarray or list.
         qe = None
         if query_embedding is not None:
             qe = (query_embedding.tolist()
                   if isinstance(query_embedding, np.ndarray)
                   else list(query_embedding))
+
+        audit_hash = compute_audit_hash(
+            ts, "recall", query_text, cells_sorted, mem_dicts, prev, qe,
+        )
 
         return AuditLog(
             timestamp=ts, operation="recall", query_text=query_text,
