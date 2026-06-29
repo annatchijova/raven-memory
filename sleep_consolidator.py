@@ -249,6 +249,8 @@ def apply_consolidation(db_path: Path, node: Dict) -> Tuple[str, int]:
         conn.execute("BEGIN IMMEDIATE")
 
         row = conn.execute("SELECT COALESCE(MAX(cell_id), -1) FROM memories").fetchone()
+        # Re-read MAX inside the IMMEDIATE transaction to minimize TOCTOU window.
+        # The UNIQUE constraint on cell_id (enforced at DB level) is the hard guard.
         cell_id = (row[0] if row[0] is not None else -1) + 1
 
         conn.execute(
