@@ -866,7 +866,7 @@ class AdaptiveMemoryEngine:
         # P1: pairs already linked by _auto_link_contradictions. Without this,
         # every store on a hot topic re-issued O(n) redundant INSERT OR REPLACE
         # writes per existing contradiction (O(n²) total per topic).
-        self._linked_pairs: Set[Tuple[int, int]] = set()
+        self._linked_pairs: Set[Tuple[int, int, str]] = set()
 
         self.stylometric = StylometricExtractor()
         self._author_fingerprints: Dict[str, StylometricFingerprint] = {}
@@ -929,8 +929,8 @@ class AdaptiveMemoryEngine:
         self._rebuild_kdtree()
 
         # P1: hydrate the linked-pairs cache so dedup survives restarts.
-        for f, t, _lt in self._db.load_all_cell_links():
-            self._linked_pairs.add((f, t))
+        for f, t, lt in self._db.load_all_cell_links():
+            self._linked_pairs.add((f, t, lt.name if hasattr(lt, 'name') else str(lt)))
 
         logger.info(f"Loaded {len(mems)} memories, {len(self._points)} live cells from DB")
 
@@ -1044,13 +1044,12 @@ class AdaptiveMemoryEngine:
             if mem_id == new_entry.memory_id:
                 continue
             if claim and claim != new_claim:
-                pair = (new_entry.cell_id, cell_id)
-                if pair in self._linked_pairs:
-                    continue  # P1: already linked — skip redundant writes
+                if (new_entry.cell_id, cell_id, "INHIBITORY") in self._linked_pairs:
+                    continue  # P1: already inhibitory-linked — skip redundant writes
                 self._db.store_cell_link(new_entry.cell_id, cell_id, LinkType.INHIBITORY, auto=True)
                 self._db.store_cell_link(cell_id, new_entry.cell_id, LinkType.INHIBITORY, auto=True)
-                self._linked_pairs.add((new_entry.cell_id, cell_id))
-                self._linked_pairs.add((cell_id, new_entry.cell_id))
+                self._linked_pairs.add((new_entry.cell_id, cell_id, "INHIBITORY"))
+                self._linked_pairs.add((cell_id, new_entry.cell_id, "INHIBITORY"))
                 logger.info(
                     f"INHIBITORY link: cell {new_entry.cell_id} ({new_claim}) "
                     f"↔ cell {cell_id} ({claim}) [topic={topic}]"
