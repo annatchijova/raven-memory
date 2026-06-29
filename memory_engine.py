@@ -800,8 +800,11 @@ class MemoryStore:
         if fp_raw:
             try:
                 fingerprint = StylometricFingerprint(**json.loads(fp_raw))
-            except Exception:
-                pass
+            except Exception as _fp_exc:
+                logger.error(
+                    f"Corrupted stylometric fingerprint in row — forensic verification disabled for this memory. "
+                    f"Error: {_fp_exc}"
+                )
 
         recall_count = 0
         try:
