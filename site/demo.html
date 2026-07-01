@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>raven-memory — live demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..600;1,9..144,300..600&family=Schibsted+Grotesk:wght@400;500;600&family=Spline+Sans+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --night: #0A0D16;
+  --night-2: #0D1120;
+  --membrane: #141A2A;
+  --membrane-2: #1A2236;
+  --hairline: rgba(233,236,245,.08);
+  --hairline-2: rgba(233,236,245,.14);
+  --moonlight: #E9ECF5;
+  --plume: #939BB0;
+  --resonance: #5EE6D0;
+  --gold: #E9B94D;
+  --ember: #E2604E;
+  --violet: #8B7CF6;
+  --display: 'Fraunces', Georgia, serif;
+  --body: 'Schibsted Grotesk', -apple-system, sans-serif;
+  --mono: 'Spline Sans Mono', ui-monospace, monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { height: 100%; }
+body {
+  background: var(--night);
+  color: var(--plume);
+  font-family: var(--body);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+::selection { background: rgba(94,230,208,.25); color: var(--moonlight); }
+
+/* ---- top bar ---- */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--night-2);
+  flex-shrink: 0;
+}
+.logo {
+  font-family: var(--display);
+  font-size: 20px;
+  font-style: italic;
+  color: var(--moonlight);
+  letter-spacing: -0.01em;
+}
+.logo span { color: var(--resonance); }
+.topbar-tag {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--resonance);
+  border: 1px solid rgba(94,230,208,.25);
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+.topbar-status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--resonance);
+  box-shadow: 0 0 6px var(--resonance);
+}
+.dot.offline { background: var(--ember); box-shadow: 0 0 6px var(--ember); }
+
+/* ---- layout ---- */
+.main {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ---- left: conversation ---- */
+.conv-col {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--hairline);
+  overflow: hidden;
+}
+.conv-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.conv-scroll::-webkit-scrollbar { width: 5px; }
+.conv-scroll::-webkit-scrollbar-track { background: transparent; }
+.conv-scroll::-webkit-scrollbar-thumb { background: var(--hairline-2); border-radius: 3px; }
+
+/* messages */
+.msg {
+  max-width: 88%;
+  animation: fadeUp .35s ease both;
+}
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+.msg.user {
+  align-self: flex-end;
+}
+.msg.user .bubble {
+  background: var(--membrane-2);
+  border: 1px solid var(--hairline-2);
+  border-radius: 14px 14px 4px 14px;
+  padding: 12px 16px;
+  color: var(--moonlight);
+  font-size: 14.5px;
+}
+.msg.agent .bubble {
+  background: transparent;
+  color: var(--moonlight);
+  font-size: 14.5px;
+  line-height: 1.65;
+}
+.msg.agent .bubble p { margin-bottom: 8px; }
+.msg.agent .bubble p:last-child { margin-bottom: 0; }
+.msg-meta {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--plume);
+  margin-top: 6px;
+  opacity: .7;
+}
+.msg.user .msg-meta { text-align: right; }
+
+/* memories under agent response */
+.mem-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+.mem-card {
+  background: var(--membrane);
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  padding: 12px 14px;
+  transition: border-color .2s;
+}
+.mem-card:hover { border-color: var(--hairline-2); }
+.mem-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.state-badge {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+.state-badge.REINFORCED { background: rgba(94,230,208,.15); color: var(--resonance); }
+.state-badge.NEUTRAL { background: rgba(139,124,246,.12); color: var(--violet); }
+.state-badge.FORGOTTEN { background: rgba(226,96,78,.1); color: var(--ember); }
+.mem-source {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--plume);
+  opacity: .6;
+}
+.mem-score {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gold);
+}
+.mem-content {
+  font-size: 13.5px;
+  color: var(--moonlight);
+  opacity: .9;
+}
+.mem-breakdown {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--plume);
+  margin-top: 6px;
+  opacity: .55;
+}
+.mem-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.mem-actions button {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--hairline-2);
+  background: transparent;
+  cursor: pointer;
+  transition: all .2s;
+}
+.btn-reinforce { color: var(--resonance); }
+.btn-reinforce:hover { background: rgba(94,230,208,.12); border-color: var(--resonance); }
+.btn-forget { color: var(--ember); }
+.btn-forget:hover { background: rgba(226,96,78,.1); border-color: var(--ember); }
+
+/* input area */
+.input-area {
+  padding: 16px 24px;
+  border-top: 1px solid var(--hairline);
+  background: var(--night-2);
+  flex-shrink: 0;
+}
+.input-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+#queryInput {
+  flex: 1;
+  background: var(--membrane);
+  border: 1px solid var(--hairline-2);
+  border-radius: 10px;
+  padding: 12px 16px;
+  color: var(--moonlight);
+  font-family: var(--body);
+  font-size: 14.5px;
+  resize: none;
+  outline: none;
+  min-height: 44px;
+  max-height: 120px;
+  transition: border-color .2s;
+}
+#queryInput:focus { border-color: rgba(94,230,208,.35); }
+#queryInput::placeholder { color: var(--plume); opacity: .5; }
+#sendBtn {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  border: none;
+  background: var(--resonance);
+  color: var(--night);
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity .2s, transform .1s;
+}
+#sendBtn:hover { opacity: .88; }
+#sendBtn:active { transform: scale(.95); }
+#sendBtn:disabled { opacity: .35; cursor: not-allowed; }
+.input-hint {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--plume);
+  opacity: .45;
+  margin-top: 6px;
+}
+
+/* ---- right sidebar ---- */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--night-2);
+}
+.side-section {
+  padding: 18px;
+  border-bottom: 1px solid var(--hairline);
+}
+.side-section:last-child { border-bottom: none; flex: 1; overflow-y: auto; }
+.side-title {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--plume);
+  margin-bottom: 14px;
+}
+
+/* MSS display */
+.mss-display {
+  text-align: center;
+  padding: 8px 0;
+}
+.mss-value {
+  font-family: var(--display);
+  font-size: 48px;
+  font-weight: 400;
+  color: var(--resonance);
+  line-height: 1;
+}
+.mss-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--plume);
+  margin-top: 4px;
+}
+.mss-spark {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--violet);
+  letter-spacing: 2px;
+  margin-top: 6px;
+}
+
+/* stats grid */
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.stat-box {
+  background: var(--membrane);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.stat-num {
+  font-family: var(--mono);
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--moonlight);
+}
+.stat-lbl {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--plume);
+  margin-top: 2px;
+}
+
+/* state bars */
+.state-bars { margin-top: 12px; }
+.state-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.state-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.state-row .label { width: 80px; }
+.state-row .count { margin-left: auto; color: var(--moonlight); }
+
+/* audit section */
+.audit-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.audit-entry {
+  background: var(--membrane);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.audit-op {
+  color: var(--resonance);
+  text-transform: uppercase;
+  letter-spacing: .1em;
+}
+.audit-hash {
+  color: var(--plume);
+  opacity: .5;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.audit-badge {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .1em;
+  padding: 3px 10px;
+  border-radius: 4px;
+  margin-bottom: 10px;
+}
+.audit-badge.ok { background: rgba(94,230,208,.12); color: var(--resonance); }
+.audit-badge.broken { background: rgba(226,96,78,.12); color: var(--ember); }
+
+/* loading */
+.loading-dots::after {
+  content: '';
+  animation: dots 1.2s steps(4,end) infinite;
+}
+@keyframes dots {
+  0%   { content: ''; }
+  25%  { content: '.'; }
+  50%  { content: '..'; }
+  75%  { content: '...'; }
+  100% { content: ''; }
+}
+
+/* welcome */
+.welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  text-align: center;
+  padding: 40px;
+  gap: 16px;
+}
+.welcome-icon {
+  font-size: 48px;
+  opacity: .6;
+}
+.welcome h2 {
+  font-family: var(--display);
+  font-size: 24px;
+  color: var(--moonlight);
+  font-weight: 400;
+  font-style: italic;
+}
+.welcome p {
+  max-width: 420px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.welcome-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 8px;
+}
+.suggestion {
+  background: var(--membrane);
+  border: 1px solid var(--hairline-2);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--moonlight);
+  cursor: pointer;
+  transition: all .2s;
+}
+.suggestion:hover {
+  border-color: rgba(94,230,208,.3);
+  background: var(--membrane-2);
+}
+
+/* add memory panel */
+.add-panel {
+  padding: 14px 18px;
+  border-top: 1px solid var(--hairline);
+  background: var(--night-2);
+  flex-shrink: 0;
+}
+.add-toggle {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--plume);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 0;
+  transition: color .2s;
+}
+.add-toggle:hover { color: var(--moonlight); }
+.add-form {
+  display: none;
+  margin-top: 10px;
+  flex-direction: column;
+  gap: 8px;
+}
+.add-form.show { display: flex; }
+.add-form textarea {
+  background: var(--membrane);
+  border: 1px solid var(--hairline-2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--moonlight);
+  font-family: var(--body);
+  font-size: 13px;
+  resize: none;
+  outline: none;
+  min-height: 60px;
+}
+.add-form textarea:focus { border-color: rgba(94,230,208,.35); }
+.add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.add-row select {
+  background: var(--membrane);
+  border: 1px solid var(--hairline-2);
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: var(--moonlight);
+  font-family: var(--mono);
+  font-size: 12px;
+  outline: none;
+}
+.add-row select option { background: var(--membrane); }
+.btn-add {
+  margin-left: auto;
+  background: var(--violet);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 16px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: opacity .2s;
+}
+.btn-add:hover { opacity: .85; }
+
+/* toast */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--membrane-2);
+  border: 1px solid var(--hairline-2);
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--moonlight);
+  opacity: 0;
+  transition: all .3s ease;
+  z-index: 100;
+  pointer-events: none;
+}
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* responsive */
+@media (max-width: 860px) {
+  .main { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+}
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <div class="logo">raven<span>-memory</span></div>
+  <span class="topbar-tag">live demo</span>
+  <div class="topbar-status">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">connecting...</span>
+  </div>
+</div>
+
+<!-- Main layout -->
+<div class="main">
+
+  <!-- Left: conversation -->
+  <div class="conv-col">
+    <div class="conv-scroll" id="convScroll">
+      <div class="welcome" id="welcome">
+        <div class="welcome-icon">&#x1F985;</div>
+        <h2>the memory field is listening</h2>
+        <p>Ask a question and watch the agent recall memories from its adaptive field &mdash; reinforced truths rise, forgotten noise fades, contradictions compete.</p>
+        <div class="welcome-suggestions">
+          <button class="suggestion" onclick="useSuggestion(this)">Es VIGÍA un sistema de machine learning?</button>
+          <button class="suggestion" onclick="useSuggestion(this)">What is raven-memory?</button>
+          <button class="suggestion" onclick="useSuggestion(this)">When is the SANS hackathon deadline?</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add memory -->
+    <div class="add-panel">
+      <button class="add-toggle" onclick="toggleAdd()">+ add memory to field</button>
+      <div class="add-form" id="addForm">
+        <textarea id="addContent" placeholder="Memory content..."></textarea>
+        <div class="add-row">
+          <select id="addLayer">
+            <option value="semantic">semantic</option>
+            <option value="episodic">episodic</option>
+            <option value="procedural">procedural</option>
+          </select>
+          <select id="addState">
+            <option value="NEUTRAL">neutral</option>
+            <option value="REINFORCED">reinforced</option>
+          </select>
+          <button class="btn-add" onclick="addMemory()">Store</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Input -->
+    <div class="input-area">
+      <div class="input-row">
+        <textarea id="queryInput" rows="1" placeholder="Ask the memory field..." onkeydown="handleKey(event)"></textarea>
+        <button id="sendBtn" onclick="sendQuery()">&#x2192;</button>
+      </div>
+      <div class="input-hint">Enter to send &middot; memories are recalled from Qwen Cloud embeddings</div>
+    </div>
+  </div>
+
+  <!-- Right: sidebar -->
+  <div class="sidebar">
+    <!-- MSS -->
+    <div class="side-section">
+      <div class="side-title">Memory Stability Score</div>
+      <div class="mss-display">
+        <div class="mss-value" id="mssValue">---</div>
+        <div class="mss-spark" id="mssSpark"></div>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="side-section">
+      <div class="side-title">Field state</div>
+      <div class="stat-grid">
+        <div class="stat-box">
+          <div class="stat-num" id="statTotal">0</div>
+          <div class="stat-lbl">memories</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-num" id="statCells">0</div>
+          <div class="stat-lbl">cells</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-num" id="statRecalls">0</div>
+          <div class="stat-lbl">recalls</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-num" id="statNeighbors">0</div>
+          <div class="stat-lbl">avg neighbors</div>
+        </div>
+      </div>
+      <div class="state-bars" id="stateBars"></div>
+    </div>
+
+    <!-- Audit -->
+    <div class="side-section" style="flex:1; overflow-y:auto;">
+      <div class="side-title">Audit chain</div>
+      <div id="auditBadge"></div>
+      <div class="audit-scroll" id="auditScroll"></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '';  // same origin
+let mssHistory = [];
+let busy = false;
+
+// ---- Init ----
+async function init() {
+  try {
+    const r = await fetch(API + '/health');
+    const d = await r.json();
+    const prov = d.embedding_provider || {};
+    const dot = document.getElementById('statusDot');
+    const txt = document.getElementById('statusText');
+    if (d.status === 'ok') {
+      dot.classList.remove('offline');
+      txt.textContent = prov.active === 'qwen_api' ? 'qwen cloud' :
+                         prov.active === 'local' ? 'local embeddings' :
+                         prov.active || 'online';
+    } else {
+      dot.classList.add('offline');
+      txt.textContent = 'degraded';
+    }
+    updateStats(d.stats);
+  } catch(e) {
+    document.getElementById('statusDot').classList.add('offline');
+    document.getElementById('statusText').textContent = 'offline';
+  }
+  loadAudit();
+}
+
+// ---- Stats ----
+function updateStats(s) {
+  if (!s) return;
+  document.getElementById('statTotal').textContent = s.total_memories || 0;
+  document.getElementById('statCells').textContent = s.voronoi_cells || 0;
+  document.getElementById('statRecalls').textContent = s.total_recalls || 0;
+  document.getElementById('statNeighbors').textContent = (s.avg_neighbors || 0).toFixed(1);
+
+  const mss = s.memory_stability_score || 0;
+  document.getElementById('mssValue').textContent = mss.toFixed(3);
+  mssHistory.push(mss);
+  if (mssHistory.length > 30) mssHistory.shift();
+  renderSpark();
+
+  const sd = s.state_distribution || {};
+  const bars = document.getElementById('stateBars');
+  bars.innerHTML = [
+    { label: 'reinforced', count: sd.REINFORCED || 0, color: 'var(--resonance)' },
+    { label: 'neutral',    count: sd.NEUTRAL || 0,    color: 'var(--violet)' },
+    { label: 'forgotten',  count: sd.FORGOTTEN || 0,  color: 'var(--ember)' },
+  ].map(b => `
+    <div class="state-row">
+      <span class="state-dot" style="background:${b.color}"></span>
+      <span class="label">${b.label}</span>
+      <span class="count">${b.count}</span>
+    </div>
+  `).join('');
+}
+
+function renderSpark() {
+  if (mssHistory.length < 2) { document.getElementById('mssSpark').textContent = ''; return; }
+  const chars = '▁▂▃▄▅▆▇█';
+  const hi = Math.max(...mssHistory), lo = Math.min(...mssHistory);
+  const range = hi - lo || 0.001;
+  document.getElementById('mssSpark').textContent = mssHistory.map(v => {
+    const i = Math.min(7, Math.floor((v - lo) / range * 7));
+    return chars[i];
+  }).join('');
+}
+
+// ---- Audit ----
+async function loadAudit() {
+  try {
+    const r = await fetch(API + '/audit?limit=8');
+    const d = await r.json();
+    const badge = document.getElementById('auditBadge');
+    if (d.chain_intact && d.hash_integrity) {
+      badge.innerHTML = '<span class="audit-badge ok">chain intact &#x2713;</span>';
+    } else {
+      badge.innerHTML = '<span class="audit-badge broken">chain broken &#x2717;</span>';
+    }
+    const scroll = document.getElementById('auditScroll');
+    scroll.innerHTML = (d.entries || []).slice(0, 8).map(e => `
+      <div class="audit-entry">
+        <span class="audit-op">${e.operation || '?'}</span>
+        &nbsp;&middot;&nbsp; ${e.returned_to_agent || 0} memories
+        <div class="audit-hash">${(e.audit_hash || '').slice(0, 32)}...</div>
+      </div>
+    `).join('');
+  } catch(e) {}
+}
+
+// ---- Send query ----
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendQuery(); }
+}
+
+function useSuggestion(el) {
+  document.getElementById('queryInput').value = el.textContent;
+  sendQuery();
+}
+
+async function sendQuery() {
+  const input = document.getElementById('queryInput');
+  const q = input.value.trim();
+  if (!q || busy) return;
+
+  // Hide welcome
+  const w = document.getElementById('welcome');
+  if (w) w.remove();
+
+  busy = true;
+  input.value = '';
+  document.getElementById('sendBtn').disabled = true;
+
+  // User message
+  appendMsg('user', q);
+
+  // Loading
+  const loadId = 'load-' + Date.now();
+  appendMsg('agent', '<span class="loading-dots">Thinking</span>', loadId);
+
+  try {
+    const r = await fetch(API + '/recall', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: q, top_k: 5, hops: 2, store_interaction: true })
+    });
+    const d = await r.json();
+
+    // Remove loading
+    const loadEl = document.getElementById(loadId);
+    if (loadEl) loadEl.remove();
+
+    // Agent response
+    const content = d.qwen_response?.content || 'No response.';
+    const mems = d.recalled_memories || [];
+    const latency = d.latency_ms || 0;
+
+    let html = formatResponse(content);
+    html += renderMemCards(mems);
+
+    appendMsg('agent', html, null, `${latency}ms · ${mems.length} memories recalled`);
+
+    // Update sidebar
+    updateStats(d.stats);
+    loadAudit();
+
+  } catch(e) {
+    const loadEl = document.getElementById(loadId);
+    if (loadEl) loadEl.remove();
+    appendMsg('agent', `<span style="color:var(--ember)">Error: ${e.message}</span>`);
+  }
+
+  busy = false;
+  document.getElementById('sendBtn').disabled = false;
+  input.focus();
+}
+
+function formatResponse(text) {
+  // Basic markdown-like formatting
+  return text.split('\n').filter(l => l.trim()).map(l => `<p>${escHtml(l)}</p>`).join('');
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function renderMemCards(mems) {
+  if (!mems.length) return '';
+  return '<div class="mem-cards">' + mems.map(m => `
+    <div class="mem-card">
+      <div class="mem-top">
+        <span class="state-badge ${m.state}">${m.state}</span>
+        <span class="mem-source">${m.source || ''} · hop ${m.hop_distance}</span>
+        <span class="mem-score">${m.final_score.toFixed(3)}</span>
+      </div>
+      <div class="mem-content">${escHtml(m.content_preview)}</div>
+      <div class="mem-breakdown">
+        sim=${m.base_score.toFixed(3)} × state=${m.state_boost} × decay=${m.hop_decay.toFixed(3)}
+        + syn=${m.synaptic_boost.toFixed(3)} + rec=${m.recency_bonus.toFixed(4)}
+      </div>
+      <div class="mem-actions">
+        <button class="btn-reinforce" onclick="reinforce('${m.memory_id}')">reinforce</button>
+        <button class="btn-forget" onclick="forget('${m.memory_id}')">forget</button>
+      </div>
+    </div>
+  `).join('') + '</div>';
+}
+
+function appendMsg(role, html, id, meta) {
+  const scroll = document.getElementById('convScroll');
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  if (id) div.id = id;
+  div.innerHTML = `<div class="bubble">${html}</div>` +
+    (meta ? `<div class="msg-meta">${meta}</div>` : '');
+  scroll.appendChild(div);
+  scroll.scrollTop = scroll.scrollHeight;
+}
+
+// ---- Reinforce / Forget ----
+async function reinforce(mid) {
+  try {
+    const r = await fetch(API + `/memories/${mid}/reinforce`, { method: 'POST' });
+    const d = await r.json();
+    toast(`Reinforced — MSS: ${d.mss?.toFixed(3) || '?'}`);
+    refreshStats();
+  } catch(e) { toast('Error: ' + e.message); }
+}
+
+async function forget(mid) {
+  try {
+    const r = await fetch(API + `/memories/${mid}/forget`, { method: 'POST' });
+    const d = await r.json();
+    toast(`Forgotten — MSS: ${d.mss?.toFixed(3) || '?'}`);
+    refreshStats();
+  } catch(e) { toast('Error: ' + e.message); }
+}
+
+async function refreshStats() {
+  try {
+    const r = await fetch(API + '/stats');
+    updateStats(await r.json());
+    loadAudit();
+  } catch(e) {}
+}
+
+// ---- Add memory ----
+function toggleAdd() {
+  document.getElementById('addForm').classList.toggle('show');
+}
+
+async function addMemory() {
+  const content = document.getElementById('addContent').value.trim();
+  if (!content) return;
+  const layer = document.getElementById('addLayer').value;
+  const state = document.getElementById('addState').value;
+  try {
+    const r = await fetch(API + '/memories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, layer, state, metadata: {} })
+    });
+    const d = await r.json();
+    toast(`Stored in cell ${d.cell_id}`);
+    document.getElementById('addContent').value = '';
+    document.getElementById('addForm').classList.remove('show');
+    refreshStats();
+  } catch(e) { toast('Error: ' + e.message); }
+}
+
+// ---- Toast ----
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ---- Auto-resize textarea ----
+document.getElementById('queryInput').addEventListener('input', function() {
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+
+// Go
+init();
+</script>
+</body>
+</html>
