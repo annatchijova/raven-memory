@@ -582,7 +582,7 @@ body {
 
 <!-- Top bar -->
 <div class="topbar">
-  <div class="logo">raven<span>-memory</span></div>
+  <a href="/" style="text-decoration:none"><div class="logo">raven<span>-memory</span></div></a>
   <span class="topbar-tag">live demo</span>
   <div class="topbar-status">
     <span class="dot" id="statusDot"></span>
@@ -695,24 +695,28 @@ async function init() {
   try {
     const r = await fetch(API + '/health');
     const d = await r.json();
-    const prov = d.embedding_provider || {};
-    const dot = document.getElementById('statusDot');
-    const txt = document.getElementById('statusText');
-    if (d.status === 'ok') {
-      dot.classList.remove('offline');
-      txt.textContent = prov.active === 'qwen_api' ? 'qwen cloud' :
-                         prov.active === 'local' ? 'local embeddings' :
-                         prov.active || 'online';
-    } else {
-      dot.classList.add('offline');
-      txt.textContent = 'degraded';
-    }
+    if (d.embedding_provider) updateProvider(d.embedding_provider);
     updateStats(d.stats);
   } catch(e) {
     document.getElementById('statusDot').classList.add('offline');
     document.getElementById('statusText').textContent = 'offline';
   }
   loadAudit();
+}
+
+// ---- Provider status ----
+function updateProvider(prov) {
+  const dot = document.getElementById('statusDot');
+  const txt = document.getElementById('statusText');
+  if (prov.degraded) {
+    dot.classList.add('offline');
+    txt.textContent = 'degraded';
+  } else {
+    dot.classList.remove('offline');
+    txt.textContent = prov.active === 'qwen_api' ? 'qwen cloud' :
+                       prov.active === 'local' ? 'local embeddings' :
+                       prov.active || 'online';
+  }
 }
 
 // ---- Stats ----
@@ -818,6 +822,9 @@ async function sendQuery() {
     // Remove loading
     const loadEl = document.getElementById(loadId);
     if (loadEl) loadEl.remove();
+
+    // Update status from recall response
+    if (d.embedding_provider) updateProvider(d.embedding_provider);
 
     // Agent response
     const content = d.qwen_response?.content || 'No response.';
