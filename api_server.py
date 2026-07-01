@@ -261,7 +261,9 @@ async def _broadcast(event: str, data: Dict):
 
 from fastapi.responses import FileResponse, JSONResponse
 
-_SITE_INDEX = Path(__file__).parent / "site" / "index.html"
+_SITE_DIR = Path(__file__).parent / "site"
+_SITE_INDEX = _SITE_DIR / "index.html"
+_SITE_DEMO = _SITE_DIR / "demo.html"
 
 
 @app.get("/", include_in_schema=False)
@@ -272,6 +274,14 @@ async def root():
     if _SITE_INDEX.exists():
         return FileResponse(str(_SITE_INDEX))
     return JSONResponse({"name": "raven-memory", "version": "1.1.0", "status": "ok"})
+
+
+@app.get("/demo", include_in_schema=False)
+async def demo():
+    """Interactive demo — public, no API key needed."""
+    if _SITE_DEMO.exists():
+        return FileResponse(str(_SITE_DEMO))
+    raise HTTPException(404, "Demo page not found")
 
 
 @app.get("/api", tags=["health"])
