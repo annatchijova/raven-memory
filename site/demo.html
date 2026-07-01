@@ -815,7 +815,7 @@ async function sendQuery() {
     const r = await fetch(API + '/recall', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: q, top_k: 5, hops: 2, store_interaction: true })
+      body: JSON.stringify({ query: q, top_k: 5, hops: 3, store_interaction: false })
     });
     const d = await r.json();
 
