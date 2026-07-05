@@ -28,8 +28,8 @@ from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSock
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from memory_engine import AdaptiveMemoryEngine, MemoryState, LinkType, verify_audit_chain
-from qwen_client import MemoryAgentOrchestrator, QwenConfig
+from raven.memory_engine import AdaptiveMemoryEngine, MemoryState, LinkType, verify_audit_chain
+from raven.qwen_client import MemoryAgentOrchestrator, QwenConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("raven.api")

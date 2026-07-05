@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="screens/logo.png" alt="raven-memory logo" width="480"/>
+</p>
+
 # raven-memory
 
 ### Adaptive Memory Field for Agentic Systems
@@ -25,6 +29,10 @@ shallow — as the last.
 ---
 
 ## Architecture
+
+<p align="center">
+  <img src="screens/raven_memory_architecture.png" alt="raven-memory architecture" width="720"/>
+</p>
 
 ```
                ┌─────────────────────────────────────────────────┐
@@ -120,17 +128,28 @@ The embedding provider has three-tier fallback with **loud degradation alerts**:
 
 ```
 raven-memory/
-├── memory_engine.py       Core adaptive memory field (KDTree, STDP, audit)
-├── spectral.py            SVD-based spectral field (eigenmodes, resonance)
-├── qwen_client.py         Qwen Cloud client + MemoryAgentOrchestrator
+├── run_all.py             One-command evaluation runner
 ├── api_server.py          FastAPI REST server (Swagger at /docs, WebSocket /ws)
 ├── demo_killer.py         Gradio demo — 4 tabs, live MSS, collapse visualization
-├── sleep_consolidator.py  Offline consolidation (agglomerative clustering)
-├── test_suite.py          20 integration tests (all P0 behaviors)
-├── demo_stress_test.py    Multi-phase adversarial stress test
-├── run_all.py             One-command evaluation runner
-├── site/index.html        Landing page (EN/ZH, zero JS dependencies)
-└── requirements.txt
+├── install.sh             Setup script (venv + dependencies)
+├── requirements.txt
+├── Dockerfile
+├── raven/                 Core library
+│   ├── memory_engine.py   Adaptive memory field (KDTree, STDP, audit chain)
+│   ├── spectral.py        SVD spectral field (eigenmodes, resonance)
+│   ├── qwen_client.py     Qwen Cloud client + MemoryAgentOrchestrator
+│   └── sleep_consolidator.py  Offline consolidation (agglomerative clustering)
+├── tests/
+│   ├── test_suite.py      20 integration tests (all P0 behaviors)
+│   └── demo_stress_test.py  Multi-phase adversarial stress test
+├── site/                  Static web
+│   ├── index.html         Landing page (EN/ZH, zero JS dependencies)
+│   └── demo.html          Interactive demo page
+├── docs/
+│   ├── DEPLOY.md
+│   ├── FIXES_v1.1.md
+│   └── TEST_SESSIONS.md
+└── assets/                Demo slides (PNG)
 ```
 
 ---
@@ -223,7 +242,7 @@ recall-frequency-weighted centroid embedding and an extractive summary.
 - **Prompt injection guard** — conversation history sanitized: only `user`/`assistant` roles with string content survive
 - **Bounded context budget** — 6KB cap prevents memory context from pushing the query out of the LLM window
 
-Full fix map: [FIXES_v1.1.md](FIXES_v1.1.md)
+Full fix map: [FIXES_v1.1.md](docs/FIXES_v1.1.md)
 
 ---
 
@@ -303,3 +322,19 @@ Engine OK.
 ---
 
 *Qwen Cloud Hackathon · Track 1: MemoryAgent · Deadline: July 9, 2026*
+
+---
+
+## Demo Slides
+
+<p align="center">
+  <img src="assets/slide-1.png" width="720"/>
+  <img src="assets/slide-2.png" width="720"/>
+  <img src="assets/slide-3.png" width="720"/>
+  <img src="assets/slide-4.png" width="720"/>
+  <img src="assets/slide-5.png" width="720"/>
+  <img src="assets/slide-6.png" width="720"/>
+  <img src="assets/slide-7.png" width="720"/>
+  <img src="assets/slide-8.png" width="720"/>
+  <img src="assets/slide-9.png" width="720"/>
+</p>

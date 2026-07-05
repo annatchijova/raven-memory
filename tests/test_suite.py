@@ -17,7 +17,7 @@ import numpy as np
 
 sys.path.insert(0, ".")
 
-from memory_engine import (
+from raven.memory_engine import (
     AdaptiveMemoryEngine, MemoryState, LinkType,
     MemoryStore, StylometricExtractor, StylometricFingerprint,
 )

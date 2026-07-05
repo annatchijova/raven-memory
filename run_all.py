@@ -13,8 +13,14 @@ License: Apache 2.0
 """
 
 import argparse
+import os
 import subprocess
 import sys
+from pathlib import Path
+
+ROOT = Path(__file__).parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 BANNER = """
@@ -33,8 +39,11 @@ def run(label: str, script: str, timeout: int = 900) -> bool:
     # P1: batch phases get a hard timeout — a hung test or stress run must
     # not block the evaluation pipeline forever. Interactive phases
     # (API/demo servers) intentionally run without one.
+    env = os.environ.copy()
+    root = str(Path(__file__).parent)
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if "PYTHONPATH" in env else "")
     try:
-        result = subprocess.run([sys.executable, script], capture_output=False, timeout=timeout)
+        result = subprocess.run([sys.executable, script], capture_output=False, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         print(f"\n⏱️  Phase '{label}' exceeded {timeout}s — aborted.")
         return False
@@ -51,13 +60,13 @@ def main():
     print(BANNER)
 
     # 1. Tests
-    if not run("INTEGRITY TESTS", "test_suite.py"):
+    if not run("INTEGRITY TESTS", "tests/test_suite.py"):
         print("\n❌  Tests failed. Fix before proceeding.")
         sys.exit(1)
 
     # 2. Stress
     if not args.skip_stress:
-        ok = run("STRESS TEST & COLLAPSE VISUALIZATION", "demo_stress_test.py")
+        ok = run("STRESS TEST & COLLAPSE VISUALIZATION", "tests/demo_stress_test.py")
         if not ok:
             print("\n⚠️  Stress test had warnings — continuing.")
 

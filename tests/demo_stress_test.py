@@ -21,8 +21,8 @@ from pathlib import Path
 
 sys.path.insert(0, ".")
 
-from memory_engine import AdaptiveMemoryEngine, MemoryState
-from qwen_client import MemoryAgentOrchestrator, QwenConfig
+from raven.memory_engine import AdaptiveMemoryEngine, MemoryState
+from raven.qwen_client import MemoryAgentOrchestrator, QwenConfig
 
 
 def print_header(title):

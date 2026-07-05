@@ -21,8 +21,8 @@ from pathlib import Path
 import gradio as gr
 import numpy as np
 
-from memory_engine import AdaptiveMemoryEngine, MemoryState, LinkType
-from qwen_client import MemoryAgentOrchestrator, QwenConfig
+from raven.memory_engine import AdaptiveMemoryEngine, MemoryState, LinkType
+from raven.qwen_client import MemoryAgentOrchestrator, QwenConfig
 
 # ============================================================
 # SETUP

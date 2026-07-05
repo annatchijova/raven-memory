@@ -26,7 +26,7 @@ import numpy as np
 
 # Same canonical hash scheme as the engine — the consolidation entry must be
 # verifiable by memory_engine.verify_audit_chain() like any recall entry.
-from memory_engine import compute_audit_hash
+from raven.memory_engine import compute_audit_hash
 
 DB_PATH = Path("raven_memory.db")
 
