@@ -198,12 +198,23 @@ class StoreRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+import hashlib
+_recall_cache: Dict[str, Dict] = {}
+_recall_cache_lock = asyncio.Lock()
+
+def _cache_key(query: str, top_k: int, hops: int, layer_filter: Optional[str]) -> str:
+    normalized = query.strip().lower()
+    raw = f"{normalized}|{top_k}|{hops}|{layer_filter or ''}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
 class RecallRequest(BaseModel):
     query: str = Field(..., description="Natural language query")
     top_k: int = Field(5, ge=1, le=20)
     hops: int = Field(2, ge=0, le=4)
     layer_filter: Optional[str] = None
     store_interaction: bool = Field(False, description="Store query as episodic memory")
+    no_cache: bool = Field(False, description="Bypass cache, force a live Qwen call")
 
 
 class CellLinkRequest(BaseModel):
@@ -432,6 +443,16 @@ async def forget_memory(memory_id: str):
 @app.post("/recall", tags=["recall"], summary="Recall memories matching a query",
           dependencies=[Depends(require_token), Depends(rate_limited)])
 async def recall(req: RecallRequest):
+    key = _cache_key(req.query, req.top_k, req.hops, req.layer_filter)
+
+    if not req.no_cache:
+        async with _recall_cache_lock:
+            cached = _recall_cache.get(key)
+        if cached is not None:
+            cached_copy = dict(cached)
+            cached_copy["_served_from_cache"] = True
+            return cached_copy
+
     orch = _get_orch()
     result = orch.process_message(
         user_text=req.query,
@@ -440,6 +461,11 @@ async def recall(req: RecallRequest):
         hops=req.hops,
         layer_filter=req.layer_filter,
     )
+    result["_served_from_cache"] = False
+
+    async with _recall_cache_lock:
+        _recall_cache[key] = dict(result)
+
     await _broadcast("recall_executed", {"query": req.query, "hits": len(result["recalled_memories"])})
     return result
 
