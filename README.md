@@ -6,7 +6,7 @@
 
 ### Adaptive Memory Field for Agentic Systems
 
-🐦‍⬛ **[Live demo & architecture](https://annatchijova.github.io/vigia/raven-memory-2.html)** 🐦‍⬛ | **Track 1: MemoryAgent · Qwen Cloud Hackathon**
+**[Live demo & architecture](https://annatchijova.github.io/vigia/raven-memory-2.html)**
 
 > *"The agent doesn't* find *memories — it* resonates *with them."*
 
@@ -321,7 +321,45 @@ Engine OK.
 
 ---
 
-*Qwen Cloud Hackathon · Track 1: MemoryAgent · Deadline: July 9, 2026*
+## MCP Server (Model Context Protocol)
+
+raven-memory exposes its full API as an MCP server for Claude and other
+MCP-capable agents:
+
+```bash
+python3 mcp_server.py    # stdio transport
+```
+
+**Tools available:**
+
+| Tool | Description |
+|------|-------------|
+| `raven_store` | Store a memory (text → auto-embedding → field insertion) |
+| `raven_recall` | Semantic recall with BFS hop expansion and field dynamics |
+| `raven_reinforce` | Mark memory as validated truth (1.5x boost) |
+| `raven_forget` | Exclude memory from recall (preserved, not deleted) |
+| `raven_create_link` | Create RESONANT or INHIBITORY cell link |
+| `raven_get_memory` | Fetch single memory by ID |
+| `raven_stats` | Engine telemetry (MSS, cells, links, state distribution) |
+| `raven_audit_trail` | Tamper-evident hash chain verification |
+| `raven_export_graph` | Export memory graph (nodes + edges) |
+| `raven_info` | Architecture description and current status |
+
+**Claude Code config** (`~/.claude/settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "raven-memory": {
+      "command": "python3",
+      "args": ["/path/to/raven-memory/mcp_server.py"],
+      "env": {
+        "RAVEN_DB_PATH": "/path/to/raven_memory.db"
+      }
+    }
+  }
+}
+```
 
 ---
 
