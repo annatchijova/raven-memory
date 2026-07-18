@@ -8,7 +8,7 @@
 
 **Track 1: MemoryAgent — Qwen Cloud Hackathon**
 
-**[Live demo & architecture](https://annatchijova.github.io/vigia/raven-memory-2.html)**
+**[Live demo & architecture → raven-memory.vercel.app](https://raven-memory.vercel.app)**
 
 > *"The agent doesn't* find *memories — it* resonates *with them."*
 
