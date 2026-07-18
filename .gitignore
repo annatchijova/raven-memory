@@ -39,3 +39,6 @@ Thumbs.db
 # Backups and archives
 *.bak
 *.zip
+
+# Vercel
+.vercel
