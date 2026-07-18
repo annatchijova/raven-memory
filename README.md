@@ -284,13 +284,31 @@ in-memory index.
 ## LLM integration — model-agnostic
 
 The memory field is pure math and needs no LLM. The orchestrator that *uses* it
-works with any provider:
+(`raven/qwen_client.py`) works with any provider, but is built Qwen-first:
 
 | Provider | Embeddings | Chat completions | How to enable |
 |---|---|---|---|
 | **Qwen Cloud** | `text-embedding-v3` | `qwen-max` | `export DASHSCOPE_API_KEY=...` |
 | **Claude** (Anthropic) | — | `claude-sonnet-4-6` | `export ANTHROPIC_API_KEY=...` |
 | **Local / offline** | `all-MiniLM-L6-v2` | deterministic stub | no key needed |
+
+Both the embedder and the chat client talk to the **Alibaba Cloud DashScope
+international endpoint** (`dashscope-intl.aliyuncs.com/compatible-mode/v1`,
+configurable via `QWEN_BASE_URL`):
+
+- **Embeddings** (`EmbeddingProvider`) use a three-tier fallback — local
+  `sentence-transformers` first (fast, offline), then Qwen's `/embeddings` endpoint
+  with `text-embedding-v3` (requesting the engine's exact `dimensions` so a Matryoshka
+  model can never silently return the wrong shape), then a deterministic SHA-256
+  dummy vector as a last resort — with every fallback to dummy loudly logged as
+  degraded, never silent.
+- **Chat completions** (`QwenLLMClient`) call `qwen-max` via `/chat/completions`,
+  injecting the recalled-memory context and a sanitized conversation window into
+  the prompt, with retry/backoff and an offline stub response when no key is set.
+- `MemoryAgentOrchestrator` chains embed → recall → Qwen completion → optional
+  store into one call, and reports `embedding_provider` status (which tier actually
+  served the request) in every response so degraded (non-Qwen, non-local) answers
+  are visible to the caller, not just "it worked."
 
 The orchestrator sanitizes conversation history against prompt injection (only
 `user`/`assistant` roles with string content survive) and caps injected memory
