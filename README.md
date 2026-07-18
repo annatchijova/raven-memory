@@ -523,6 +523,12 @@ Full fix map: [FIXES_v1.1.md](docs/FIXES_v1.1.md)
 
 ---
 
+## Built with
+
+**Qwen Cloud** — `text-embedding-v3` embeddings and `qwen-max` chat completions via the **Alibaba Cloud DashScope** international endpoint, powering the semantic layer and the memory-agent orchestrator. Python, NumPy, SciPy (KDTree), SQLite in WAL mode, `sentence-transformers` (local offline embeddings), FastAPI + WebSocket, Gradio (interactive demo), the Model Context Protocol (MCP server), and a static site on Vercel. Runs fully offline with deterministic fallbacks and lights up with Qwen Cloud when a `DASHSCOPE_API_KEY` is set.
+
+---
+
 ## Authors
 
 Anna Tchijova + Claude + Qwen (VIGÍA AI Collective)
