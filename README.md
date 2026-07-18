@@ -66,6 +66,49 @@ closest cell). Recall does not stop at that cell: it *propagates* from it.
 
 ---
 
+## Running live on Alibaba Cloud
+
+Deployed on **Alibaba Cloud ECS** (Docker), embeddings via **Qwen Cloud** (`text-embedding-v3`), public on port 8012.
+
+**The memory field, live.** A recall over the deployed field: results ranked by the ternary-state scoring, the Memory Stability Score, the field state (memories · cells · state distribution), and the audit chain reporting `chain intact ✓`.
+
+![raven-memory live demo on Alibaba Cloud — recall results, Memory Stability Score, field state, and an intact audit chain](visual/screenshot-2026-07-18-20-06-38.png)
+
+**The backend, on the ECS console.** The engine booting with `embeddings: qwen api, dim=512`, and `/health` returning the full live stats — proof it runs on Alibaba Cloud, not just locally.
+
+![raven-memory backend on the Alibaba Cloud ECS Workbench — engine startup and the /health endpoint returning live stats](visual/screenshot-2026-07-18-20-07-23.png)
+
+**The interactive demo.** Ask the field a question, store memories by layer (episodic / semantic / procedural) and state — everything recalled from Qwen Cloud embeddings.
+
+![raven-memory interactive demo — chat with the field and store memories by layer and state](visual/screenshot-2026-07-01-15-21-57.png)
+
+<details>
+<summary>More views — the API and the seeded corpus (click to expand)</summary>
+
+The `/memories` endpoint (raw JSON, ternary states + metadata):
+
+![raven-memory /memories endpoint returning stored memories with ternary states and metadata](visual/screenshot-2026-07-05-16-17-17.png)
+
+Seeding the field and verifying `/stats`, plus the `/recall` response cache (`cached: False` then `cached: True`):
+
+![raven-memory corpus seeding and /stats over the deployed field](visual/screenshot-2026-07-05-16-59-10.png)
+
+![raven-memory /stats and the /recall response cache on the deployed field](visual/screenshot-2026-07-05-17-11-33.png)
+
+![raven-memory on Alibaba Cloud — additional view](visual/screenshot-2026-07-01-15-26-20.png)
+
+![raven-memory on Alibaba Cloud — additional view](visual/screenshot-2026-07-05-16-18-38.png)
+
+![raven-memory on Alibaba Cloud — additional view](visual/screenshot-2026-07-05-16-20-15.png)
+
+![raven-memory on Alibaba Cloud — additional view](visual/screenshot-2026-07-05-16-50-51.png)
+
+![raven-memory on Alibaba Cloud — additional view](visual/screenshot-2026-07-18-20-06-57.png)
+
+</details>
+
+---
+
 ## What actually happens on a recall
 
 1. **Seed.** The query embedding hits a lazily-rebuilt `scipy` **KDTree** and
