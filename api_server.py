@@ -602,9 +602,10 @@ async def websocket_endpoint(ws: WebSocket):
 # ============================================================
 
 if __name__ == "__main__":
+    _port = int(os.environ.get("RAVEN_API_PORT", "8000"))
     print("\n🦅 raven-memory API Server")
-    print("   Swagger UI: http://localhost:8000/docs")
-    print("   ReDoc:      http://localhost:8000/redoc")
-    print("   WebSocket:  ws://localhost:8000/ws")
+    print(f"   Swagger UI: http://localhost:{_port}/docs")
+    print(f"   ReDoc:      http://localhost:{_port}/redoc")
+    print(f"   WebSocket:  ws://localhost:{_port}/ws")
     print()
-    uvicorn.run("api_server:app", host="0.0.0.0", port=8000, reload=False, log_level="info")
+    uvicorn.run("api_server:app", host="0.0.0.0", port=_port, reload=False, log_level="info")

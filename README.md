@@ -488,6 +488,14 @@ WS     /ws                          Real-time event stream
 
 Full interactive docs at **http://localhost:8000/docs**
 
+Port `8000` is only a default, not a fixed requirement — if it's already taken
+by another local service, set `RAVEN_API_PORT` before launching:
+
+```bash
+export RAVEN_API_PORT=8010
+python run_all.py --api        # → http://localhost:8010/docs
+```
+
 ---
 
 ## Memory Stability Score (MSS)

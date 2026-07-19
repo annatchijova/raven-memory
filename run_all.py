@@ -72,11 +72,12 @@ def main():
 
     # 3. Optional servers
     if args.api:
+        api_port = os.environ.get("RAVEN_API_PORT", "8000")
         print(f"\n{'━'*66}")
         print("  PHASE: REST API SERVER")
         print(f"{'━'*66}")
-        print("  Swagger UI : http://localhost:8000/docs")
-        print("  WebSocket  : ws://localhost:8000/ws")
+        print(f"  Swagger UI : http://localhost:{api_port}/docs")
+        print(f"  WebSocket  : ws://localhost:{api_port}/ws")
         print("  Press Ctrl+C to stop")
         print(f"{'━'*66}")
         subprocess.run([sys.executable, "api_server.py"])
