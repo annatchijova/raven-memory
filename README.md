@@ -10,6 +10,7 @@
 
 **[Live demo & architecture → raven-memory.vercel.app](https://raven-memory.vercel.app)**
 **[Static preview — a populated field, no server needed → site/preview.html](site/preview.html)**
+**[This is what it looks like once you clone the repo and set your own API key → annatchijova.github.io/vigia/raven.html](https://annatchijova.github.io/vigia/raven.html)**
 
 > *"The agent doesn't* find *memories — it* resonates *with them."*
 
