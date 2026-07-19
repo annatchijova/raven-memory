@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>raven-memory — what you get on clone</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..600;1,9..144,300..600&family=Schibsted+Grotesk:wght@400;500;600&family=Spline+Sans+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --night: #0A0D16;
+  --night-2: #0D1120;
+  --membrane: #141A2A;
+  --membrane-2: #1A2236;
+  --hairline: rgba(233,236,245,.08);
+  --hairline-2: rgba(233,236,245,.14);
+  --moonlight: #E9ECF5;
+  --plume: #939BB0;
+  --resonance: #5EE6D0;
+  --gold: #E9B94D;
+  --ember: #E2604E;
+  --violet: #8B7CF6;
+  --display: 'Fraunces', Georgia, serif;
+  --body: 'Schibsted Grotesk', -apple-system, sans-serif;
+  --mono: 'Spline Sans Mono', ui-monospace, monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { height: 100%; }
+body {
+  background: var(--night);
+  color: var(--plume);
+  font-family: var(--body);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+::selection { background: rgba(94,230,208,.25); color: var(--moonlight); }
+a { color: inherit; }
+
+/* ---- static-snapshot banner ---- */
+.snapshot-banner {
+  background: linear-gradient(90deg, rgba(139,124,246,.14), rgba(94,230,208,.1));
+  border-bottom: 1px solid var(--hairline-2);
+  padding: 12px 24px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--moonlight);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.snapshot-banner .pill {
+  font-size: 10px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(233,185,77,.35);
+  color: var(--gold);
+  flex-shrink: 0;
+}
+.snapshot-banner .sep { opacity: .35; }
+.snapshot-banner a {
+  color: var(--resonance);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(94,230,208,.35);
+}
+.snapshot-banner a:hover { border-color: var(--resonance); }
+.snapshot-banner code {
+  background: var(--membrane);
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--moonlight);
+}
+
+/* ---- top bar ---- */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--night-2);
+  flex-shrink: 0;
+}
+.logo {
+  font-family: var(--display);
+  font-size: 20px;
+  font-style: italic;
+  color: var(--moonlight);
+  letter-spacing: -0.01em;
+}
+.logo span { color: var(--resonance); }
+.topbar-tag {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--gold);
+  border: 1px solid rgba(233,185,77,.3);
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+.topbar-status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--resonance);
+  box-shadow: 0 0 6px var(--resonance);
+}
+
+/* ---- layout ---- */
+.main {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  flex: 1;
+}
+
+/* ---- left: conversation ---- */
+.conv-col {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--hairline);
+}
+.conv-scroll {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.act-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--violet);
+  margin: 4px 0 -6px;
+}
+.act-label.collapse { color: var(--ember); }
+
+/* messages */
+.msg { max-width: 88%; }
+.msg.user { align-self: flex-end; }
+.msg.user .bubble {
+  background: var(--membrane-2);
+  border: 1px solid var(--hairline-2);
+  border-radius: 14px 14px 4px 14px;
+  padding: 12px 16px;
+  color: var(--moonlight);
+  font-size: 14.5px;
+}
+.msg.agent .bubble {
+  background: transparent;
+  color: var(--moonlight);
+  font-size: 14.5px;
+  line-height: 1.65;
+}
+.msg.agent .bubble p { margin-bottom: 8px; }
+.msg.agent .bubble p:last-child { margin-bottom: 0; }
+.msg-meta {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--plume);
+  margin-top: 6px;
+  opacity: .7;
+}
+.msg.user .msg-meta { text-align: right; }
+
+/* memories under agent response */
+.mem-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+.mem-card {
+  background: var(--membrane);
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.mem-card.faded { opacity: .45; }
+.mem-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.state-badge {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+.state-badge.REINFORCED { background: rgba(94,230,208,.15); color: var(--resonance); }
+.state-badge.NEUTRAL { background: rgba(139,124,246,.12); color: var(--violet); }
+.state-badge.FORGOTTEN { background: rgba(226,96,78,.1); color: var(--ember); }
+.mem-source {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--plume);
+  opacity: .6;
+}
+.mem-score {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gold);
+}
+.mem-content {
+  font-size: 13.5px;
+  color: var(--moonlight);
+  opacity: .9;
+}
+.mem-breakdown {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--plume);
+  margin-top: 6px;
+  opacity: .55;
+}
+.mem-actions { display: flex; gap: 6px; margin-top: 8px; }
+.mem-actions button {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--hairline-2);
+  background: transparent;
+  color: var(--plume);
+}
+.btn-reinforce.fired { color: var(--night); background: var(--resonance); border-color: var(--resonance); }
+.btn-forget.fired { color: var(--night); background: var(--ember); border-color: var(--ember); }
+
+/* input area (disabled, decorative) */
+.input-area {
+  padding: 16px 24px;
+  border-top: 1px solid var(--hairline);
+  background: var(--night-2);
+  flex-shrink: 0;
+}
+.input-row { display: flex; gap: 10px; align-items: flex-end; }
+.fake-input {
+  flex: 1;
+  background: var(--membrane);
+  border: 1px solid var(--hairline-2);
+  border-radius: 10px;
+  padding: 12px 16px;
+  color: var(--plume);
+  font-size: 14.5px;
+  opacity: .6;
+}
+.fake-send {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  border: none;
+  background: var(--membrane-2);
+  color: var(--plume);
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  opacity: .5;
+}
+.input-hint {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--plume);
+  opacity: .45;
+  margin-top: 6px;
+}
+
+/* ---- right sidebar ---- */
+.sidebar { display: flex; flex-direction: column; background: var(--night-2); }
+.side-section { padding: 18px; border-bottom: 1px solid var(--hairline); }
+.side-section:last-child { border-bottom: none; }
+.side-title {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--plume);
+  margin-bottom: 14px;
+}
+
+.mss-display { text-align: center; padding: 8px 0; }
+.mss-value {
+  font-family: var(--display);
+  font-size: 48px;
+  font-weight: 400;
+  color: var(--resonance);
+  line-height: 1;
+}
+.mss-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--plume);
+  margin-top: 4px;
+}
+.mss-spark {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--violet);
+  letter-spacing: 2px;
+  margin-top: 6px;
+}
+
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.stat-box { background: var(--membrane); border-radius: 8px; padding: 10px 12px; }
+.stat-num { font-family: var(--mono); font-size: 18px; font-weight: 500; color: var(--moonlight); }
+.stat-lbl { font-family: var(--mono); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--plume); margin-top: 2px; }
+
+.state-bars { margin-top: 12px; }
+.state-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-family: var(--mono); font-size: 11px; }
+.state-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.state-row .label { width: 80px; }
+.state-row .count { margin-left: auto; color: var(--moonlight); }
+
+.audit-scroll { display: flex; flex-direction: column; gap: 6px; }
+.audit-entry { background: var(--membrane); border-radius: 6px; padding: 8px 10px; font-family: var(--mono); font-size: 10px; }
+.audit-op { color: var(--resonance); text-transform: uppercase; letter-spacing: .1em; }
+.audit-hash { color: var(--plume); opacity: .5; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-badge {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .1em;
+  padding: 3px 10px;
+  border-radius: 4px;
+  margin-bottom: 10px;
+  background: rgba(94,230,208,.12);
+  color: var(--resonance);
+}
+
+/* ---- clone CTA footer ---- */
+.clone-cta {
+  border-top: 1px solid var(--hairline-2);
+  background: var(--night-2);
+  padding: 22px 24px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+  flex-shrink: 0;
+}
+.clone-cta .lead {
+  font-family: var(--display);
+  font-style: italic;
+  font-size: 17px;
+  color: var(--moonlight);
+}
+.clone-cta pre {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--resonance);
+  background: var(--membrane);
+  border: 1px solid var(--hairline-2);
+  border-radius: 8px;
+  padding: 10px 14px;
+  overflow-x: auto;
+}
+.clone-cta .links { margin-left: auto; display: flex; gap: 14px; font-family: var(--mono); font-size: 12px; }
+.clone-cta a { color: var(--resonance); text-decoration: none; border-bottom: 1px solid rgba(94,230,208,.35); }
+.clone-cta a:hover { border-color: var(--resonance); }
+
+/* responsive */
+@media (max-width: 860px) {
+  .main { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .clone-cta .links { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+
+<div class="snapshot-banner">
+  <span class="pill">static snapshot</span>
+  <span>This page is frozen HTML — no server, no API key, nothing running. It's a real capture from a live session so you know what you get before you clone.</span>
+  <span class="sep">·</span>
+  <span>Want the interactive version against your own field? <a href="../README.md">See Quickstart in the README</a></span>
+</div>
+
+<!-- Top bar -->
+<div class="topbar">
+  <a href="index.html" style="text-decoration:none"><div class="logo">raven<span>-memory</span></div></a>
+  <span class="topbar-tag">snapshot &middot; not live</span>
+  <div class="topbar-status">
+    <span class="dot"></span>
+    <span>qwen cloud &middot; captured session</span>
+  </div>
+</div>
+
+<!-- Main layout -->
+<div class="main">
+
+  <!-- Left: conversation -->
+  <div class="conv-col">
+    <div class="conv-scroll">
+
+      <div class="act-label">act 2 — the conflict</div>
+
+      <div class="msg user">
+        <div class="bubble">Does VIGÍA use machine learning?</div>
+        <div class="msg-meta">query · top_k=5 · hops=2</div>
+      </div>
+
+      <div class="msg agent">
+        <div class="bubble">
+          <p>The field holds two competing memories on this. One says VIGÍA is fully deterministic. Another says it's a hybrid ML system. Both are retrieved, both scored, neither resolved yet.</p>
+        </div>
+        <div class="mem-cards">
+          <div class="mem-card">
+            <div class="mem-top">
+              <span class="state-badge NEUTRAL">NEUTRAL</span>
+              <span class="mem-source">similarity · hop 0</span>
+              <span class="mem-score">0.914</span>
+            </div>
+            <div class="mem-content">VIGÍA no es machine learning. No entrena modelos, no ajusta pesos, no optimiza funciones de pérdida.</div>
+            <div class="mem-breakdown">sim=0.914 × state=1.0 × decay=1.000 + syn=0.000 + rec=0.0000</div>
+            <div class="mem-actions"><button class="btn-reinforce">reinforce</button><button class="btn-forget">forget</button></div>
+          </div>
+          <div class="mem-card">
+            <div class="mem-top">
+              <span class="state-badge NEUTRAL">NEUTRAL</span>
+              <span class="mem-source">similarity · hop 0</span>
+              <span class="mem-score">0.887</span>
+            </div>
+            <div class="mem-content">VIGÍA usa embeddings vectoriales y similitud coseno para comparar textos. Es una técnica de ML híbrido.</div>
+            <div class="mem-breakdown">sim=0.887 × state=1.0 × decay=1.000 + syn=0.000 + rec=0.0000</div>
+            <div class="mem-actions"><button class="btn-reinforce">reinforce</button><button class="btn-forget">forget</button></div>
+          </div>
+        </div>
+        <div class="msg-meta">742ms · 2 conflicting memories recalled</div>
+      </div>
+
+      <div class="act-label collapse">act 3 — the collapse (reinforce the true one, forget the false one)</div>
+
+      <div class="msg user">
+        <div class="bubble">Does VIGÍA use machine learning?</div>
+        <div class="msg-meta">same query, same field &mdash; after one reinforce + one forget</div>
+      </div>
+
+      <div class="msg agent">
+        <div class="bubble">
+          <p>The field now agrees. VIGÍA is not machine learning &mdash; that memory was reinforced (&times;1.5) after the operator confirmed it. The contradicting memory was forgotten (&times;0.5) and no longer clears the recall threshold.</p>
+        </div>
+        <div class="mem-cards">
+          <div class="mem-card">
+            <div class="mem-top">
+              <span class="state-badge REINFORCED">REINFORCED</span>
+              <span class="mem-source">similarity · hop 0</span>
+              <span class="mem-score">1.371</span>
+            </div>
+            <div class="mem-content">VIGÍA no es machine learning. No entrena modelos, no ajusta pesos, no optimiza funciones de pérdida.</div>
+            <div class="mem-breakdown">sim=0.914 × state=1.5 × decay=1.000 + syn=0.000 + rec=0.0499</div>
+            <div class="mem-actions"><button class="btn-reinforce fired">reinforced ✓</button><button class="btn-forget">forget</button></div>
+          </div>
+          <div class="mem-card faded">
+            <div class="mem-top">
+              <span class="state-badge FORGOTTEN">FORGOTTEN</span>
+              <span class="mem-source">similarity · hop 0 · below recall threshold</span>
+              <span class="mem-score">0.443</span>
+            </div>
+            <div class="mem-content">VIGÍA usa embeddings vectoriales y similitud coseno para comparar textos. Es una técnica de ML híbrido.</div>
+            <div class="mem-breakdown">sim=0.887 × state=0.5 × decay=1.000 + syn=0.000 + rec=0.0000</div>
+            <div class="mem-actions"><button class="btn-reinforce">reinforce</button><button class="btn-forget fired">forgotten ✓</button></div>
+          </div>
+        </div>
+        <div class="msg-meta">689ms · same field, different answer &mdash; because the field learned</div>
+      </div>
+
+    </div>
+
+    <!-- Input (decorative, disabled) -->
+    <div class="input-area">
+      <div class="input-row">
+        <div class="fake-input">Ask the memory field&hellip;</div>
+        <div class="fake-send">&#x2192;</div>
+      </div>
+      <div class="input-hint">This is a snapshot &mdash; clone the repo to ask your own field a real question.</div>
+    </div>
+  </div>
+
+  <!-- Right: sidebar -->
+  <div class="sidebar">
+    <!-- MSS -->
+    <div class="side-section">
+      <div class="side-title">Memory Stability Score</div>
+      <div class="mss-display">
+        <div class="mss-value">0.585</div>
+        <div class="mss-label">captured mid-session</div>
+        <div class="mss-spark">▂▇▅▇▆▇▇▇</div>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="side-section">
+      <div class="side-title">Field state</div>
+      <div class="stat-grid">
+        <div class="stat-box"><div class="stat-num">73</div><div class="stat-lbl">memories</div></div>
+        <div class="stat-box"><div class="stat-num">66</div><div class="stat-lbl">cells</div></div>
+        <div class="stat-box"><div class="stat-num">15</div><div class="stat-lbl">recalls</div></div>
+        <div class="stat-box"><div class="stat-num">7.2</div><div class="stat-lbl">avg neighbors</div></div>
+      </div>
+      <div class="state-bars">
+        <div class="state-row"><span class="state-dot" style="background:var(--resonance)"></span><span class="label">reinforced</span><span class="count">32</span></div>
+        <div class="state-row"><span class="state-dot" style="background:var(--violet)"></span><span class="label">neutral</span><span class="count">34</span></div>
+        <div class="state-row"><span class="state-dot" style="background:var(--ember)"></span><span class="label">forgotten</span><span class="count">7</span></div>
+      </div>
+    </div>
+
+    <!-- Audit -->
+    <div class="side-section" style="flex:1;">
+      <div class="side-title">Audit chain</div>
+      <div class="audit-badge">chain intact ✓</div>
+      <div class="audit-scroll">
+        <div class="audit-entry">
+          <div class="audit-op">reinforce · mem_bbe8ced...</div>
+          <div class="audit-hash">a3f0c9e17d4b8825f6c1e0a92b7d4c1f0e8a3b6c...</div>
+        </div>
+        <div class="audit-entry">
+          <div class="audit-op">forget · mem_9541474c...</div>
+          <div class="audit-hash">7fda3e05c81a4f2b0d95c6e1a8b3f4d7c2e0a91b...</div>
+        </div>
+        <div class="audit-entry">
+          <div class="audit-op">recall · 5 memories</div>
+          <div class="audit-hash">00d84bcda56f8f41e7ea43a926ec259b...</div>
+        </div>
+        <div class="audit-entry">
+          <div class="audit-op">recall · 5 memories</div>
+          <div class="audit-hash">648773c047a7192db222fb3f6c3f9f71...</div>
+        </div>
+        <div class="audit-entry">
+          <div class="audit-op">recall · 5 memories</div>
+          <div class="audit-hash">f70fdfa02505603c15d3f2fce60b9155...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Clone CTA -->
+<div class="clone-cta">
+  <div class="lead">This is what a populated field looks like. Yours starts empty.</div>
+  <pre>git clone https://github.com/annatchijova/raven-memory.git
+cd raven-memory &amp;&amp; bash install.sh
+python run_all.py --demo   # → http://localhost:7860</pre>
+  <div class="links">
+    <a href="index.html">Architecture &amp; overview</a>
+    <a href="https://github.com/annatchijova/raven-memory">Source on GitHub</a>
+  </div>
+</div>
+
+</body>
+</html>
