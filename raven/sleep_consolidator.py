@@ -18,11 +18,18 @@ import argparse
 import hashlib
 import json
 import sqlite3
+import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
+
+# When run as a loose script (`python raven/sleep_consolidator.py`), the
+# repo root is not on sys.path and the `raven` package cannot resolve.
+# `python -m raven.sleep_consolidator` and package imports need no help.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Same canonical hash scheme as the engine — the consolidation entry must be
 # verifiable by memory_engine.verify_audit_chain() like any recall entry.
@@ -464,7 +471,7 @@ def main():
     # This is an offline step — no running engine to notify.
     print("\n   Spectral field rebuild...")
     try:
-        from spectral import build_and_persist_spectral_field
+        from raven.spectral import build_and_persist_spectral_field
         spec = build_and_persist_spectral_field(db_path)
         if spec and spec.is_built:
             print(f"   {spec.summary()}")

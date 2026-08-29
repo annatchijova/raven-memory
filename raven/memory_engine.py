@@ -21,13 +21,16 @@ License: Apache 2.0
 """
 
 import json
+import os
 import sqlite3
 import hashlib
+import threading
 import time
 import math
 import logging
+from collections import deque
 from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Tuple, Optional, Set
+from typing import Deque, List, Dict, Tuple, Optional, Set
 from enum import Enum
 from pathlib import Path
 
@@ -40,17 +43,32 @@ logger = logging.getLogger("raven.engine")
 # from the engine (the usual entry point) silences the late-import warning
 # for every downstream module (api_server, consolidator, demos).
 # Spectral module is optional — engine degrades gracefully without it.
+# The relative import is the real path (this module ships inside the
+# `raven` package); the absolute fallback only covers running this file
+# as a loose script. The old bare `from spectral import …` resolved in
+# neither case, so the whole spectral layer was silently dead in every
+# entry point that imported `raven.memory_engine`.
 try:
-    from spectral import SpectralField, SpectralStore
+    from .spectral import SpectralField, SpectralStore
     _SPECTRAL_AVAILABLE = True
 except ImportError:
-    _SPECTRAL_AVAILABLE = False
+    try:
+        from spectral import SpectralField, SpectralStore
+        _SPECTRAL_AVAILABLE = True
+    except ImportError:
+        _SPECTRAL_AVAILABLE = False
 
 import numpy as np
 from scipy.spatial import KDTree
 
 if not _SPECTRAL_AVAILABLE:
-    logger.debug("spectral module not found — resonance/coherence metadata disabled")
+    # A missing optional module is a degradation the operator must be able
+    # to see — resonance/coherence silently reading 0.0 is exactly the kind
+    # of plausible-but-wrong output this project promises not to produce.
+    logger.warning(
+        "spectral module not importable — resonance/coherence metadata DISABLED "
+        "(recall results will carry resonance_score=0.0). This is a degraded mode."
+    )
 
 
 # ============================================================
@@ -74,6 +92,15 @@ STDP_PRUNE_EPS = 1e-9
 # the ceiling only bounds worst-case pathological geometries.
 MAX_HOP_SEARCH = 10
 ESTILOMETRIA_THRESHOLD = 0.5
+# P1: the historical profile used to be a SINGLE arbitrary sample (the first
+# fingerprint ever seen per author) — one atypical first text poisoned the
+# profile forever and generated destructive false positives. The profile is
+# now a rolling mean over the author's recent samples, per language, and
+# enforcement (auto-FORGOTTEN) is opt-in: by default a mismatch only raises
+# a ForensicAlert. Detection and action are separate concerns.
+STYLO_PROFILE_WINDOW = 10   # samples kept per (author, language) profile
+STYLO_MIN_SAMPLES = int(os.environ.get("RAVEN_STYLO_MIN_SAMPLES", "3"))
+STYLO_ENFORCE = os.environ.get("RAVEN_STYLO_ENFORCE", "0") == "1"
 RECENCY_HALFLIFE = 86400.0  # seconds — 24 h half-life for recency bonus
 RECENCY_WEIGHT = 0.05       # small additive bonus for recently-accessed memories
 
@@ -386,6 +413,51 @@ class StylometricExtractor:
         if norm_a == 0 or norm_b == 0:
             return 0.0
         return dot / (norm_a * norm_b)
+
+
+class AuthorStyleProfile:
+    """
+    Rolling stylometric profile for one (author, language) pair.
+
+    Keeps the last STYLO_PROFILE_WINDOW fingerprints and exposes their mean
+    as a synthetic fingerprint for distance comparison. Keyed per language,
+    so a bilingual author naturally has independent profiles — the old
+    single-sample design needed an explicit language-switch escape hatch.
+    """
+
+    def __init__(self, window: int = STYLO_PROFILE_WINDOW):
+        self._samples: Deque[StylometricFingerprint] = deque(maxlen=window)
+
+    def add(self, fp: StylometricFingerprint):
+        self._samples.append(fp)
+
+    @property
+    def count(self) -> int:
+        return len(self._samples)
+
+    def mean_fingerprint(self) -> StylometricFingerprint:
+        n = len(self._samples)
+        words: Set[str] = set()
+        punct_keys: Set[str] = set()
+        for fp in self._samples:
+            words |= set(fp.functional_words)
+            punct_keys |= set(fp.punctuation_profile)
+        func = {
+            w: sum(fp.functional_words.get(w, 0.0) for fp in self._samples) / n
+            for w in words
+        }
+        punct = {
+            k: sum(fp.punctuation_profile.get(k, 0.0) for fp in self._samples) / n
+            for k in punct_keys
+        }
+        avg_len = sum(fp.avg_sentence_length for fp in self._samples) / n
+        return StylometricFingerprint(
+            functional_words=func,
+            avg_sentence_length=avg_len,
+            punctuation_profile=punct,
+            fingerprint_hash="profile_mean",
+            language=self._samples[-1].language,
+        )
 
 
 # ============================================================
@@ -866,6 +938,16 @@ class MemoryStore:
 # ENGINE
 # ============================================================
 
+def _synchronized(method):
+    """Serialize a public engine method under the instance RLock (see __init__)."""
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    wrapper.__name__ = method.__name__
+    wrapper.__doc__ = method.__doc__
+    return wrapper
+
+
 class AdaptiveMemoryEngine:
     """
     Raven-Memory core engine.
@@ -905,7 +987,16 @@ class AdaptiveMemoryEngine:
         self._resonant_neighbors: Dict[int, List[Tuple[int, LinkType]]] = {}
 
         self.stylometric = StylometricExtractor()
-        self._author_fingerprints: Dict[str, StylometricFingerprint] = {}
+        # Rolling profiles keyed by (author_id, language). See AuthorStyleProfile.
+        self._author_profiles: Dict[Tuple[str, str], AuthorStyleProfile] = {}
+
+        # P0: public entry points may now be called from worker threads (the
+        # API server offloads blocking work off the event loop). The engine's
+        # in-memory structures (KDTree dirty flag, active cells, topic index,
+        # author profiles) are not safe under concurrent mutation. Coarse
+        # RLock: engine ops are fast local math; the slow network calls
+        # (embeddings, LLM) happen outside the engine and still overlap.
+        self._lock = threading.RLock()
 
         # Spectral field — optional, loaded from DB if available.
         # Call rebuild_spectral_field() after bulk stores or consolidation.
@@ -938,6 +1029,7 @@ class AdaptiveMemoryEngine:
         self._topic_index = {}
         self._linked_pairs = set()
         self._resonant_neighbors = {}
+        self._author_profiles = {}
         self._next_cell_id = 0
 
         mems = self._db.load_memories()
@@ -960,8 +1052,11 @@ class AdaptiveMemoryEngine:
             if m.state.name != "FORGOTTEN":
                 self._active_cells.add(m.cell_id)   # only live cells enter KDTree
             self._index_topic(m)
-            if m.fingerprint and m.author_id not in self._author_fingerprints:
-                self._author_fingerprints[m.author_id] = m.fingerprint
+            if m.fingerprint:
+                # Every persisted sample feeds the rolling profile (rows come
+                # back ordered by cell_id ≈ creation order, so the window
+                # ends up holding the author's most recent style).
+                self._profile_for(m.author_id, m.fingerprint.language).add(m.fingerprint)
 
         self._rebuild_kdtree()
 
@@ -1017,6 +1112,18 @@ class AdaptiveMemoryEngine:
                 self.cell_neighbors.setdefault(n_cell, set()).add(cell_id)
 
     # ----------------------------------------------------------
+    # AUTHOR PROFILES
+    # ----------------------------------------------------------
+
+    def _profile_for(self, author_id: str, language: str) -> AuthorStyleProfile:
+        key = (author_id, language or "und")
+        profile = self._author_profiles.get(key)
+        if profile is None:
+            profile = AuthorStyleProfile()
+            self._author_profiles[key] = profile
+        return profile
+
+    # ----------------------------------------------------------
     # TOPIC INDEX
     # ----------------------------------------------------------
 
@@ -1033,6 +1140,7 @@ class AdaptiveMemoryEngine:
     # STORE
     # ----------------------------------------------------------
 
+    @_synchronized
     def store(
         self,
         content: str,
@@ -1059,8 +1167,7 @@ class AdaptiveMemoryEngine:
         self._kdtree_dirty = True  # Lazy — don't rebuild on every store
 
         fingerprint = self.stylometric.extract(content, author_id)
-        if author_id not in self._author_fingerprints:
-            self._author_fingerprints[author_id] = fingerprint
+        self._profile_for(author_id, fingerprint.language).add(fingerprint)
 
         entry = MemoryEntry(
             memory_id=memory_id, layer=layer, content=content,
@@ -1102,6 +1209,7 @@ class AdaptiveMemoryEngine:
     # RECALL
     # ----------------------------------------------------------
 
+    @_synchronized
     def recall(
         self,
         query_embedding: np.ndarray,
@@ -1193,24 +1301,19 @@ class AdaptiveMemoryEngine:
                 f_inhib += 1
                 continue
 
-            # Stylometric forensic check (only meaningful for texts of ≥15 words)
-            if (mem.fingerprint and mem.author_id in self._author_fingerprints
-                    and len(mem.content.split()) >= 15):
-                historical = self._author_fingerprints[mem.author_id]
-                # P1: a bilingual author is not a tamperer. Function-word
-                # profiles are only comparable within one language — skip
-                # the forensic comparison on a confirmed language switch.
-                lang_a = getattr(mem.fingerprint, "language", "und")
-                lang_b = getattr(historical, "language", "und")
-                if lang_a != lang_b and "und" not in (lang_a, lang_b):
-                    logger.info(
-                        f"Stylometric check skipped for {mem.memory_id[:16]}: "
-                        f"language switch {lang_b}→{lang_a} (not evidence of tampering)"
-                    )
-                else:
-                    dist = self.stylometric.compare(mem.fingerprint, historical)
+            # Stylometric forensic check (only meaningful for texts of ≥15 words).
+            # The profile is per (author, language), so a bilingual author is
+            # compared only against their own history in the same language —
+            # a language switch simply hits a different profile.
+            if mem.fingerprint and len(mem.content.split()) >= 15:
+                lang = getattr(mem.fingerprint, "language", "und")
+                profile = self._author_profiles.get((mem.author_id, lang))
+                # A single-sample profile is an anecdote, not a baseline:
+                # require STYLO_MIN_SAMPLES before trusting the distance.
+                if profile is not None and profile.count >= STYLO_MIN_SAMPLES:
+                    dist = self.stylometric.compare(mem.fingerprint, profile.mean_fingerprint())
                     if dist > ESTILOMETRIA_THRESHOLD:
-                        self._db.update_state(mem.memory_id, MemoryState.FORGOTTEN)
+                        action = "DEGRADED_TO_FORGOTTEN" if STYLO_ENFORCE else "ALERT_ONLY"
                         self._db.store_alert(ForensicAlert(
                             alert_id=f"alert_{int(time.time()*1000)}_{mem.memory_id[:8]}",
                             timestamp=now,
@@ -1218,13 +1321,25 @@ class AdaptiveMemoryEngine:
                             detected_author="UNKNOWN_TAMPERER",
                             expected_author=mem.author_id,
                             mismatch_score=dist,
-                            action_taken="DEGRADED_TO_FORGOTTEN",
+                            action_taken=action,
                         ))
-                        self._active_cells.discard(mem.cell_id)
-                        self._kdtree_dirty = True
-                        f_estilo += 1
-                        logger.warning(f"Forensic: tampered memory {mem.memory_id[:16]} → FORGOTTEN (dist={dist:.3f})")
-                        continue
+                        if STYLO_ENFORCE:
+                            # Opt-in (RAVEN_STYLO_ENFORCE=1): recall() mutating
+                            # state is a destructive side effect of a read —
+                            # by default we only alert.
+                            self._db.update_state(mem.memory_id, MemoryState.FORGOTTEN)
+                            self._active_cells.discard(mem.cell_id)
+                            self._kdtree_dirty = True
+                            f_estilo += 1
+                            logger.warning(
+                                f"Forensic: tampered memory {mem.memory_id[:16]} → FORGOTTEN (dist={dist:.3f})"
+                            )
+                            continue
+                        logger.warning(
+                            f"Forensic: stylometric mismatch on {mem.memory_id[:16]} "
+                            f"(dist={dist:.3f}) — alert stored, no state change "
+                            f"(set RAVEN_STYLO_ENFORCE=1 to quarantine)"
+                        )
 
             # Score components
             sim = float(self._cosine_sim(query_embedding, mem.embedding))
@@ -1388,6 +1503,7 @@ class AdaptiveMemoryEngine:
     # STATE MANAGEMENT
     # ----------------------------------------------------------
 
+    @_synchronized
     def reinforce(self, memory_id: str) -> MemoryEntry:
         self._db.update_state(memory_id, MemoryState.REINFORCED)
         m = self._db.load_memory(memory_id)
@@ -1405,6 +1521,7 @@ class AdaptiveMemoryEngine:
         logger.info(f"Reinforced: {memory_id}")
         return m
 
+    @_synchronized
     def forget(self, memory_id: str) -> MemoryEntry:
         self._db.update_state(memory_id, MemoryState.FORGOTTEN)
         m = self._db.load_memory(memory_id)
@@ -1421,6 +1538,7 @@ class AdaptiveMemoryEngine:
         logger.info(f"Forgotten: {memory_id}")
         return m
 
+    @_synchronized
     def create_cell_link(self, from_cell_id: int, to_cell_id: int, link_type: LinkType):
         """Manually create a ternary cell link."""
         self._db.store_cell_link(from_cell_id, to_cell_id, link_type, auto=False)
@@ -1433,6 +1551,7 @@ class AdaptiveMemoryEngine:
     # STATS & EXPORT
     # ----------------------------------------------------------
 
+    @_synchronized
     def get_stats(self) -> Dict:
         # Bug #24: aggregate in SQL instead of materialising every row.
         # This runs on every recall / broadcast / dashboard tick, so it must
@@ -1469,6 +1588,7 @@ class AdaptiveMemoryEngine:
             "authors": agg["authors"],
         }
 
+    @_synchronized
     def export_graph(self, max_nodes: int = 1000) -> Dict:
         """
         Export the memory graph for external visualisation.
@@ -1627,6 +1747,7 @@ class AdaptiveMemoryEngine:
         return -1  # unreachable
 
 
+    @_synchronized
     def rebuild_spectral_field(self) -> bool:
         """
         Rebuild the spectral field from current active memories and persist to DB.

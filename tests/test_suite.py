@@ -351,7 +351,7 @@ def test_15_stats_completeness():
 
 def test_16_audit_chain_tamper_detection():
     print("[TEST 16] Audit chain is recomputable and detects content tampering")
-    from memory_engine import verify_audit_chain
+    from raven.memory_engine import verify_audit_chain
     import sqlite3 as _sq
 
     eng = fresh_engine()
@@ -482,7 +482,7 @@ def test_19_sparse_points_no_dead_cells():
 
 def test_20_greedy_clustering_large_corpus():
     print("[TEST 20] Consolidation clustering uses greedy path above the cap")
-    from sleep_consolidator import cluster_by_similarity
+    from raven.sleep_consolidator import cluster_by_similarity
     rng = np.random.default_rng(7)
     # Build 3 tight families well above the agglomerative cap → forces greedy
     families = [rng.standard_normal(384).astype(np.float32) for _ in range(3)]
