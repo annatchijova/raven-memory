@@ -989,6 +989,9 @@ class AdaptiveMemoryEngine:
         self.stylometric = StylometricExtractor()
         # Rolling profiles keyed by (author_id, language). See AuthorStyleProfile.
         self._author_profiles: Dict[Tuple[str, str], AuthorStyleProfile] = {}
+        # In alert-only mode a flagged memory stays recallable, so every later
+        # recall would re-store the same alert — dedupe per process.
+        self._alerted_memories: Set[str] = set()
 
         # P0: public entry points may now be called from worker threads (the
         # API server offloads blocking work off the event loop). The engine's
@@ -1314,15 +1317,17 @@ class AdaptiveMemoryEngine:
                     dist = self.stylometric.compare(mem.fingerprint, profile.mean_fingerprint())
                     if dist > ESTILOMETRIA_THRESHOLD:
                         action = "DEGRADED_TO_FORGOTTEN" if STYLO_ENFORCE else "ALERT_ONLY"
-                        self._db.store_alert(ForensicAlert(
-                            alert_id=f"alert_{int(time.time()*1000)}_{mem.memory_id[:8]}",
-                            timestamp=now,
-                            memory_id=mem.memory_id,
-                            detected_author="UNKNOWN_TAMPERER",
-                            expected_author=mem.author_id,
-                            mismatch_score=dist,
-                            action_taken=action,
-                        ))
+                        if mem.memory_id not in self._alerted_memories:
+                            self._alerted_memories.add(mem.memory_id)
+                            self._db.store_alert(ForensicAlert(
+                                alert_id=f"alert_{int(time.time()*1000)}_{mem.memory_id[:8]}",
+                                timestamp=now,
+                                memory_id=mem.memory_id,
+                                detected_author="UNKNOWN_TAMPERER",
+                                expected_author=mem.author_id,
+                                mismatch_score=dist,
+                                action_taken=action,
+                            ))
                         if STYLO_ENFORCE:
                             # Opt-in (RAVEN_STYLO_ENFORCE=1): recall() mutating
                             # state is a destructive side effect of a read —
