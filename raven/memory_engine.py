@@ -697,6 +697,16 @@ class MemoryStore:
         with self._connect() as conn:
             return conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
 
+    def load_top_recalled(self, limit: int) -> List[MemoryEntry]:
+        """Most-recalled memories, ordered in SQL (plan 2.4) — export_graph
+        used to materialise the whole table just to sort it in Python."""
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM memories ORDER BY recall_count DESC LIMIT ?", (limit,)
+            ).fetchall()
+            return [self._row_to_entry(r) for r in rows]
+
     def count_stats(self) -> Dict:
         """
         Aggregate counts computed in SQL — no row deserialization.
@@ -755,11 +765,33 @@ class MemoryStore:
                          (json.dumps(links), memory_id))
             conn.commit()
 
+    def update_synaptic_links_batch(self, links_by_id: Dict[str, Dict[str, float]]):
+        """All STDP weight updates of one recall in ONE transaction (plan 2.3)."""
+        if not links_by_id:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                "UPDATE memories SET synaptic_links=? WHERE memory_id=?",
+                [(json.dumps(links), mid) for mid, links in links_by_id.items()],
+            )
+            conn.commit()
+
     def update_activation(self, memory_id: str, timestamp: float):
         with self._connect() as conn:
             conn.execute(
                 "UPDATE memories SET last_activation=?, recall_count=recall_count+1 WHERE memory_id=?",
                 (timestamp, memory_id),
+            )
+            conn.commit()
+
+    def update_activations(self, memory_ids: List[str], timestamp: float):
+        """Touch all top-k results of one recall in ONE transaction (plan 2.3)."""
+        if not memory_ids:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                "UPDATE memories SET last_activation=?, recall_count=recall_count+1 WHERE memory_id=?",
+                [(timestamp, mid) for mid in memory_ids],
             )
             conn.commit()
 
@@ -772,6 +804,23 @@ class MemoryStore:
                 (from_cell_id, to_cell_id, link_type, created_at, auto_generated)
                 VALUES (?,?,?,?,?)""",
                 (from_id, to_id, link_type.name, time.time(), int(auto)),
+            )
+            conn.commit()
+
+    def store_cell_links_batch(self, rows: List[Tuple[int, int, LinkType, bool]]):
+        """
+        Write many links in ONE transaction (plan 2.3). A store on a hot topic
+        used to issue 2 connections + commits per contradiction pair.
+        """
+        if not rows:
+            return
+        now = time.time()
+        with self._connect() as conn:
+            conn.executemany(
+                """INSERT OR REPLACE INTO cell_links
+                (from_cell_id, to_cell_id, link_type, created_at, auto_generated)
+                VALUES (?,?,?,?,?)""",
+                [(f, t, lt.name, now, int(auto)) for f, t, lt, auto in rows],
             )
             conn.commit()
 
@@ -1008,6 +1057,11 @@ class AdaptiveMemoryEngine:
         self._linked_pairs: Set[Tuple[int, int, str]] = set()
         # RESONANT neighbours for BFS hop-distance — keyed by from_cell_id.
         self._resonant_neighbors: Dict[int, List[Tuple[int, LinkType]]] = {}
+        # P1 (plan 2.2): full directional link index kept in memory and
+        # updated on every link write, so recall() never re-reads the whole
+        # cell_links table. Out-of-process writers (sleep consolidator)
+        # require an engine reload — same contract as the KDTree.
+        self._cell_links_index: Dict[int, List[Tuple[int, LinkType]]] = {}
 
         self.stylometric = StylometricExtractor()
         # Rolling profiles keyed by (author_id, language). See AuthorStyleProfile.
@@ -1056,6 +1110,7 @@ class AdaptiveMemoryEngine:
         self._linked_pairs = set()
         self._resonant_neighbors = {}
         self._author_profiles = {}
+        self._cell_links_index = {}
         self._next_cell_id = 0
 
         mems = self._db.load_memories()
@@ -1087,12 +1142,14 @@ class AdaptiveMemoryEngine:
         self._rebuild_kdtree()
 
         # P1: hydrate the linked-pairs cache so dedup survives restarts.
-        # Also populate _resonant_neighbors for BFS hop-distance via RESONANT links.
+        # Also populate _resonant_neighbors for BFS hop-distance via RESONANT
+        # links, and the full directional index recall() reads (plan 2.2).
         for f, t, lt in self._db.load_all_cell_links():
             lt_str = lt.name if hasattr(lt, 'name') else str(lt)
+            lt_enum = LinkType[lt_str]
             self._linked_pairs.add((f, t, lt_str))
+            self._cell_links_index.setdefault(f, []).append((t, lt_enum))
             if lt_str == "RESONANT":
-                lt_enum = LinkType[lt_str]
                 self._resonant_neighbors.setdefault(f, []).append((t, lt_enum))
                 self._resonant_neighbors.setdefault(t, []).append((f, lt_enum))
 
@@ -1216,20 +1273,28 @@ class AdaptiveMemoryEngine:
         if not topic or not new_claim:
             return
 
+        # Collect every pair, then write them in ONE transaction (plan 2.3) —
+        # a store on a hot topic used to commit twice per contradiction.
+        batch: List[Tuple[int, int, LinkType, bool]] = []
         for mem_id, cell_id, claim in self._topic_index.get(topic, []):
             if mem_id == new_entry.memory_id:
                 continue
             if claim and claim != new_claim:
                 if (new_entry.cell_id, cell_id, "INHIBITORY") in self._linked_pairs:
                     continue  # P1: already inhibitory-linked — skip redundant writes
-                self._db.store_cell_link(new_entry.cell_id, cell_id, LinkType.INHIBITORY, auto=True)
-                self._db.store_cell_link(cell_id, new_entry.cell_id, LinkType.INHIBITORY, auto=True)
+                batch.append((new_entry.cell_id, cell_id, LinkType.INHIBITORY, True))
+                batch.append((cell_id, new_entry.cell_id, LinkType.INHIBITORY, True))
                 self._linked_pairs.add((new_entry.cell_id, cell_id, "INHIBITORY"))
                 self._linked_pairs.add((cell_id, new_entry.cell_id, "INHIBITORY"))
+                self._cell_links_index.setdefault(new_entry.cell_id, []).append(
+                    (cell_id, LinkType.INHIBITORY))
+                self._cell_links_index.setdefault(cell_id, []).append(
+                    (new_entry.cell_id, LinkType.INHIBITORY))
                 logger.info(
                     f"INHIBITORY link: cell {new_entry.cell_id} ({new_claim}) "
                     f"↔ cell {cell_id} ({claim}) [topic={topic}]"
                 )
+        self._db.store_cell_links_batch(batch)
 
     # ----------------------------------------------------------
     # RECALL
@@ -1264,20 +1329,23 @@ class AdaptiveMemoryEngine:
         _, idx = self.kdtree.query(query_embedding.reshape(1, -1))
         query_cell = self._kdtree_idx_to_cell[int(idx[0])]  # array pos → cell_id
 
-        # ---- Batch load all cell links before BFS ----
-        # Avoids one SQL query per cell per hop (was ~43 queries for hops=2, k=6).
-        # The dict is read-only within this recall call; no invalidation needed.
-        all_cell_links: Dict[int, List[Tuple[int, LinkType]]] = (
-            self._db.load_all_cell_links_indexed()
-        )
+        # P1 (plan 2.2): cell links come from the in-memory index maintained
+        # alongside the DB — the old load_all_cell_links_indexed() re-read the
+        # ENTIRE cell_links table on every recall, O(total links) per query.
+        all_cell_links: Dict[int, List[Tuple[int, LinkType]]] = self._cell_links_index
 
         # ---- BFS hop expansion with ternary links ----
+        # P1 (plan 2.1): record each cell's discovery hop during the expansion.
+        # BFS discovery order IS the shortest propagation distance, so the old
+        # per-candidate _hop_distance() re-BFS (O(candidates × graph) per
+        # recall) is redundant on this path.
         activated_cells: Set[int] = set()
         inhibited_cells: Set[int] = set()
         resonant_boosts: Dict[int, float] = {}
+        cell_hops: Dict[int, int] = {query_cell: 0}
         frontier = {query_cell}
 
-        for _ in range(hops + 1):
+        for hop_idx in range(hops + 1):
             new_frontier: Set[int] = set()
             for cell in frontier:
                 if cell in inhibited_cells:
@@ -1286,6 +1354,8 @@ class AdaptiveMemoryEngine:
 
                 for neighbor in self.cell_neighbors.get(cell, set()):
                     new_frontier.add(neighbor)
+                    if neighbor not in cell_hops:
+                        cell_hops[neighbor] = hop_idx + 1
 
                 for target_id, link_type in all_cell_links.get(cell, []):
                     if link_type == LinkType.INHIBITORY:
@@ -1293,8 +1363,12 @@ class AdaptiveMemoryEngine:
                     elif link_type == LinkType.RESONANT:
                         new_frontier.add(target_id)
                         resonant_boosts[target_id] = resonant_boosts.get(target_id, 0) + 0.5
+                        if target_id not in cell_hops:
+                            cell_hops[target_id] = hop_idx + 1
                     else:
                         new_frontier.add(target_id)
+                        if target_id not in cell_hops:
+                            cell_hops[target_id] = hop_idx + 1
 
             frontier = new_frontier - activated_cells - inhibited_cells
 
@@ -1372,7 +1446,12 @@ class AdaptiveMemoryEngine:
             # Score components
             sim = float(self._cosine_sim(query_embedding, mem.embedding))
             state_boost = mem.state.value
-            hop_dist = self._hop_distance(query_cell, mem.cell_id)
+            # Discovery hop recorded during BFS (plan 2.1). Cells that entered
+            # the activated set outside the expansion (rescued REINFORCED) fall
+            # back to the explicit graph search.
+            hop_dist = cell_hops.get(mem.cell_id)
+            if hop_dist is None:
+                hop_dist = self._hop_distance(query_cell, mem.cell_id)
             hop_decay = math.exp(-HOP_LAMBDA * hop_dist) if hop_dist >= 0 else 1.0
             resonant_boost = resonant_boosts.get(mem.cell_id, 0.0)
 
@@ -1480,9 +1559,8 @@ class AdaptiveMemoryEngine:
         if current_turn_memories:
             self._update_stdp(current_turn_memories, [r.memory.memory_id for r in top_results])
 
-        # ---- Update activation timestamps ----
-        for r in top_results:
-            self._db.update_activation(r.memory.memory_id, now)
+        # ---- Update activation timestamps (one transaction, plan 2.3) ----
+        self._db.update_activations([r.memory.memory_id for r in top_results], now)
 
         audit = self._build_audit(
             query_text, query_embedding, activated_cells, top_results,
@@ -1503,6 +1581,7 @@ class AdaptiveMemoryEngine:
             m.memory_id: m
             for m in self._db.load_memories_by_ids(previous)
         }
+        updates: Dict[str, Dict[str, float]] = {}
         for prev_id in previous:
             mem = prev_mems.get(prev_id)
             if not mem:
@@ -1525,7 +1604,10 @@ class AdaptiveMemoryEngine:
                     if links[eid] <= STDP_PRUNE_EPS:
                         del links[eid]
 
-            self._db.update_synaptic_links(prev_id, links)
+            updates[prev_id] = links
+
+        # One transaction for the whole turn's weight updates (plan 2.3).
+        self._db.update_synaptic_links_batch(updates)
 
     # ----------------------------------------------------------
     # STATE MANAGEMENT
@@ -1571,6 +1653,7 @@ class AdaptiveMemoryEngine:
         """Manually create a ternary cell link."""
         self._db.store_cell_link(from_cell_id, to_cell_id, link_type, auto=False)
         self._linked_pairs.add((from_cell_id, to_cell_id, link_type.name))
+        self._cell_links_index.setdefault(from_cell_id, []).append((to_cell_id, link_type))
         if link_type == LinkType.RESONANT:
             self._resonant_neighbors.setdefault(from_cell_id, []).append((to_cell_id, link_type))
             self._resonant_neighbors.setdefault(to_cell_id, []).append((from_cell_id, link_type))
@@ -1626,11 +1709,12 @@ class AdaptiveMemoryEngine:
         request. We return the most-recalled `max_nodes` cells and only the
         edges between them, plus a `truncated` flag so the client knows.
         """
-        mems = self._db.load_memories()
-        total = len(mems)
+        # Plan 2.4: count + ORDER BY … LIMIT in SQL. The previous version
+        # loaded and deserialised every row (embedding blobs included) just
+        # to sort by recall_count in Python.
+        total = self._db.count_memories()
         truncated = total > max_nodes
-        if truncated:
-            mems = sorted(mems, key=lambda m: m.recall_count, reverse=True)[:max_nodes]
+        mems = self._db.load_top_recalled(max_nodes) if truncated else self._db.load_memories()
 
         included = {m.cell_id for m in mems}
         # Only load links between included cells — avoids O(total_links) load

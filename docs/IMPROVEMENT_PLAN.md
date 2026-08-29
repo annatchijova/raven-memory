@@ -1,6 +1,6 @@
 # Plan de mejora — raven-memory
 
-**Fecha:** 2026-08-29 · **Base:** v1.1 (`db379f2`) · **Estado:** Fase 0 completa + CI (1.1) — 2026-08-29
+**Fecha:** 2026-08-29 · **Base:** v1.1 (`db379f2`) · **Estado:** Fase 0 + CI (1.1) + 1.2 + 1.4 + 2.1–2.4 + 4.2 — 2026-08-29 (números: benchmarks/RESULTS.md)
 
 Este documento es el resultado de una revisión completa del código (motor, API,
 cliente Qwen, consolidador, spectral, MCP, tests e infraestructura). Está
@@ -163,7 +163,7 @@ No hay `.github/workflows/`. Nada impide que un push rompa los 20 tests.
   sentence-transformers), correr pytest, lint y build de Docker.
 - **Aceptación:** badge verde en README; un PR con un test roto falla.
 
-### 1.2 Empaquetado real del proyecto (P1)
+### 1.2 Empaquetado real del proyecto (P1) — ✅ HECHO
 
 `raven/__init__.py` está vacío, no hay `pyproject.toml`, y los entry points
 dependen de hacks de `sys.path` (`mcp_server.py:47`, `run_all.py:22`,
@@ -178,7 +178,7 @@ forma en que un agente real lo consumiría.
   AdaptiveMemoryEngine"` funciona desde cualquier CWD; tests corren vía
   `pytest` sin `sys.path.insert`.
 
-### 1.3 Migrar la suite a pytest y ampliar cobertura (P1)
+### 1.3 Migrar la suite a pytest y ampliar cobertura (P1) — 🔶 PARCIAL (pytest configurado vía pyproject; cobertura de api/qwen_client en test_fixes.py; faltan tests dedicados del consolidador)
 
 `tests/test_suite.py` usa un runner artesanal (`run_all()` con contador
 manual). Ya se instala pytest en requirements pero no se usa.
@@ -193,7 +193,7 @@ manual). Ya se instala pytest en requirements pero no se usa.
 - **Aceptación:** `pytest -q` verde; cobertura reportada en CI (objetivo
   inicial ≥70 % en `raven/`).
 
-### 1.4 Dependencias reproducibles y versionado de esquema (P2)
+### 1.4 Dependencias reproducibles y versionado de esquema (P2) — ✅ HECHO
 
 - `requirements.txt` usa `>=` sin lockfile → instalaciones no reproducibles
   (el propio comentario del archivo aspira a "reproducible install"). Añadir
@@ -212,7 +212,7 @@ manual). Ya se instala pytest en requirements pero no se usa.
 
 Todas con benchmarks antes/después (ver 4.2) — ninguna se fusiona sin números.
 
-### 2.1 Eliminar el doble BFS por recall (P1)
+### 2.1 Eliminar el doble BFS por recall (P1) — ✅ HECHO
 
 `recall()` ya hace un BFS de expansión, pero después llama
 `_hop_distance(query_cell, mem.cell_id)` **por cada candidato**
@@ -226,7 +226,7 @@ expansión alcanza cada celda.
 - **Aceptación:** mismos resultados en la suite; benchmark de recall con 10k
   memorias mejora de forma medible.
 
-### 2.2 No cargar todos los cell_links en cada recall (P1)
+### 2.2 No cargar todos los cell_links en cada recall (P1) — ✅ HECHO
 
 `load_all_cell_links_indexed()` (`memory_engine.py:1136`) lee la tabla
 completa de links en cada recall — O(total_links) aunque la expansión toque
@@ -238,7 +238,7 @@ completa de links en cada recall — O(total_links) aunque la expansión toque
   `_load_from_db()`; o consultar por lotes solo las celdas de la frontera.
 - **Aceptación:** recalls no escalan con el total de links (benchmark).
 
-### 2.3 Batching de escrituras post-recall (P2)
+### 2.3 Batching de escrituras post-recall (P2) — ✅ HECHO
 
 Cada recall hace: 1 UPDATE por resultado top-k (`update_activation`,
 `memory_engine.py:1341-1342`) + 1 UPDATE por memoria previa en STDP
@@ -252,7 +252,7 @@ Son ~10-30 transacciones por recall.
 - **Aceptación:** latencia p50 de recall baja (benchmark); la suite y el
   consolidador concurrente siguen verdes (WAL + busy_timeout intactos).
 
-### 2.4 `export_graph` y arranque sin materializar toda la tabla (P2)
+### 2.4 `export_graph` y arranque sin materializar toda la tabla (P2) — ✅ HECHO
 
 - `export_graph()` llama `load_memories()` completo para ordenar por
   `recall_count` (`memory_engine.py:1481-1485`) — hacerlo en SQL
@@ -364,7 +364,7 @@ campo es mejor que `top-k` plano, pero no hay ningún número que lo respalde.
 - **Aceptación:** `python -m benchmarks.run` reproduce la tabla del README
   con seed fija.
 
-### 4.2 Benchmark de rendimiento (P1, prerequisito de la Fase 2)
+### 4.2 Benchmark de rendimiento (P1, prerequisito de la Fase 2) — ✅ HECHO
 
 - Script que puebla 1k/10k/100k memorias (embeddings dummy deterministas) y
   mide: latencia de store, latencia de recall (p50/p95), tiempo de rebuild
