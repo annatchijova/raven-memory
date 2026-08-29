@@ -107,6 +107,10 @@ ESTILOMETRIA_THRESHOLD = 0.5
 # now a rolling mean over the author's recent samples, per language, and
 # enforcement (auto-FORGOTTEN) is opt-in: by default a mismatch only raises
 # a ForensicAlert. Detection and action are separate concerns.
+# Scoring coefficients that were inline literals until v1.2 (the README
+# already promised every coefficient a name — these two had escaped):
+RESONANT_BOOST = 0.5        # additive boost per RESONANT hop, scaled by sim
+SYNAPTIC_SCORE_WEIGHT = 0.3  # weight of the STDP association term in final_score
 STYLO_PROFILE_WINDOW = 10   # samples kept per (author, language) profile
 STYLO_MIN_SAMPLES = int(os.environ.get("RAVEN_STYLO_MIN_SAMPLES", "3"))
 STYLO_ENFORCE = os.environ.get("RAVEN_STYLO_ENFORCE", "0") == "1"
@@ -1438,7 +1442,7 @@ class AdaptiveMemoryEngine:
                         inhibited_cells.add(target_id)
                     elif link_type == LinkType.RESONANT:
                         new_frontier.add(target_id)
-                        resonant_boosts[target_id] = resonant_boosts.get(target_id, 0) + 0.5
+                        resonant_boosts[target_id] = resonant_boosts.get(target_id, 0) + RESONANT_BOOST
                         if target_id not in cell_hops:
                             cell_hops[target_id] = hop_idx + 1
                     else:
@@ -1549,7 +1553,7 @@ class AdaptiveMemoryEngine:
             final_score = (
                 sim * state_boost * hop_decay
                 + resonant_contribution
-                + synaptic_boost * 0.3
+                + synaptic_boost * SYNAPTIC_SCORE_WEIGHT
                 + recency_bonus
             )
             # P0: anti-correlated embeddings (sim < 0) could push the final
@@ -1622,7 +1626,7 @@ class AdaptiveMemoryEngine:
                     results.append(RecallResult(
                         memory=linked, base_score=0.0, state_boost=linked.state.value,
                         hop_decay=1.0, synaptic_boost=weight, recency_bonus=0.0,
-                        final_score=weight * 0.3, hop_distance=-1,
+                        final_score=weight * SYNAPTIC_SCORE_WEIGHT, hop_distance=-1,
                         cell_id=linked.cell_id, source="synaptic",
                     ))
                     existing_ids.add(linked_id)

@@ -1,6 +1,6 @@
 # Plan de mejora — raven-memory
 
-**Fecha:** 2026-08-29 · **Base:** v1.1 (`db379f2`) · **Estado:** Fase 0 + 1.1/1.2/1.4 + 2.1–2.5 + 3.1/3.3 + 4.1(sintético)/4.2 — 2026-08-29 (números: benchmarks/RESULTS.md y QUALITY.md)
+**Fecha:** 2026-08-29 · **Base:** v1.1 (`db379f2`) · **Estado:** ejecutado casi por completo — Fases 0–4 salvo README→ARCHITECTURE.md y la parte de dataset público de 4.1. Números: benchmarks/RESULTS.md, QUALITY.md, docs/HYPERPARAMS.md. Ver CHANGELOG.md (v1.2.0).
 
 Este documento es el resultado de una revisión completa del código (motor, API,
 cliente Qwen, consolidador, spectral, MCP, tests e infraestructura). Está
@@ -178,7 +178,7 @@ forma en que un agente real lo consumiría.
   AdaptiveMemoryEngine"` funciona desde cualquier CWD; tests corren vía
   `pytest` sin `sys.path.insert`.
 
-### 1.3 Migrar la suite a pytest y ampliar cobertura (P1) — 🔶 PARCIAL (pytest configurado vía pyproject; cobertura de api/qwen_client en test_fixes.py; faltan tests dedicados del consolidador)
+### 1.3 Migrar la suite a pytest y ampliar cobertura (P1) — ✅ HECHO (pytest vía pyproject; api/qwen_client/esquema/portabilidad en test_fixes.py; atomicidad del consolidador con inyección de fallo)
 
 `tests/test_suite.py` usa un runner artesanal (`run_all()` con contador
 manual). Ya se instala pytest en requirements pero no se usa.
@@ -276,7 +276,7 @@ para recomputar `qemb_sha256`. La cadena puede sellar el hash directamente.
 - **Aceptación:** cadenas mixtas v1/v2 verifican; crecimiento del audit log
   por recall cae un orden de magnitud.
 
-### 2.6 Backend ANN opcional para corpus grandes (P3)
+### 2.6 Backend ANN opcional para corpus grandes (P3) — ✅ HECHO
 
 KDTree en 384 dimensiones degenera a fuerza bruta (maldición de la
 dimensionalidad) y el rebuild es completo en cada dirty. Para el roadmap de
@@ -302,7 +302,7 @@ Hoy el consolidador exige reiniciar el engine para refrescar el índice
 - **Aceptación:** test: store duplicados → consolidate vía API → recall
   inmediato ve el nodo consolidado, sin reiniciar.
 
-### 3.2 Export/import del campo de memoria (P2)
+### 3.2 Export/import del campo de memoria (P2) — ✅ HECHO
 
 No hay forma de respaldar, migrar o compartir un campo salvo copiar el
 SQLite. Añadir `raven-export` / `raven-import` (JSONL: memorias, links,
@@ -323,7 +323,7 @@ uso concreto: enterarse de que el proveedor cayó a dummy **sin** mirar logs.
 - **Aceptación:** `curl /metrics` expone las series; una caída a dummy es
   visible como métrica.
 
-### 3.4 Mejoras MCP (P3) — 🔶 PARCIAL (env vars alineadas en 0.6; raven_consolidate añadida; falta raven_verify_chain y topic/claim en recall)
+### 3.4 Mejoras MCP (P3) — ✅ HECHO (env vars, raven_consolidate, raven_verify_chain, filtro topic en recall, flujo contradicción→reinforce→collapse documentado)
 
 - Alinear env vars (0.6) y añadir `raven_consolidate` (3.1) y
   `raven_verify_chain` como herramienta separada de `raven_audit_trail`.
@@ -333,7 +333,7 @@ uso concreto: enterarse de que el proveedor cayó a dummy **sin** mirar logs.
 - **Aceptación:** flujo completo store-contradicción → reinforce → recall
   ejecutable solo con herramientas MCP, cubierto por un test.
 
-### 3.5 Limpieza de repo (P3)
+### 3.5 Limpieza de repo (P3) — 🔶 PARCIAL (demo/gradio_demo.py, CHANGELOG, CONTRIBUTING; pendiente: recortar README a ARCHITECTURE.md y consolidar páginas del site — el index_v1.0 se preservó deliberadamente)
 
 - `demo_killer.py` → `demo/gradio_demo.py` (el nombre actual no ayuda en
   contextos profesionales); consolidar `site/index_v1.0.html` y páginas
@@ -372,7 +372,7 @@ campo es mejor que `top-k` plano, pero no hay ningún número que lo respalde.
   escala pequeña para detectar regresiones.
 - **Aceptación:** los PRs de la Fase 2 citan estos números antes/después.
 
-### 4.3 Calibrar los hiperparámetros con el benchmark (P3)
+### 4.3 Calibrar los hiperparámetros con el benchmark (P3) — ✅ HECHO
 
 `HOP_LAMBDA=0.15`, boost RESONANT `+0.5`, peso sináptico `×0.3`,
 `RECENCY_WEIGHT=0.05` (`memory_engine.py:63-78`) son constantes con nombre

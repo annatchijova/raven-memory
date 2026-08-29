@@ -98,25 +98,20 @@ def build_corpus(engine, rng, n_clusters):
     return centroids, cluster_members, pairs
 
 
-def main():
-    parser = argparse.ArgumentParser(description="raven-memory quality benchmark")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--clusters", type=int, default=20)
-    parser.add_argument("--queries-per-cluster", type=int, default=3)
-    args = parser.parse_args()
-
-    rng = np.random.default_rng(args.seed)
+def run(seed: int = 42, clusters: int = 20, queries_per_cluster: int = 3) -> dict:
+    """One full benchmark run → metrics dict. Reused by sweep.py (plan 4.3)."""
+    rng = np.random.default_rng(seed)
     tmp = Path(tempfile.mkdtemp()) / "quality.db"
     engine = AdaptiveMemoryEngine(db_path=tmp)
 
-    centroids, members, pairs = build_corpus(engine, rng, args.clusters)
+    centroids, members, pairs = build_corpus(engine, rng, clusters)
     all_entries = engine._db.load_memories()
 
     # ---- Metric 1: recall@5 on cluster queries (parity check) --------------
     rec_base, rec_field = [], []
     for c, centroid in enumerate(centroids):
         relevant = set(members[c])
-        for _ in range(args.queries_per_cluster):
+        for _ in range(queries_per_cluster):
             q = perturb(centroid, rng, 0.10)
             b = baseline_topk(q, all_entries)
             f, _ = engine.recall(q, top_k=TOP_K, hops=2)
@@ -147,18 +142,39 @@ def main():
         suppressed_field += (true_id in f_ids and false_id not in f_ids)
         rescued += (true_id in f_ids)
 
-    n_pairs = len(pairs)
+    return {
+        "seed": seed,
+        "n_pairs": len(pairs),
+        "recall5_base": float(np.mean(rec_base)),
+        "recall5_field": float(np.mean(rec_field)),
+        "val_first_base": val_first_base,
+        "val_first_field": val_first_field,
+        "suppressed_base": suppressed_base,
+        "suppressed_field": suppressed_field,
+        "rescued": rescued,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description="raven-memory quality benchmark")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--clusters", type=int, default=20)
+    parser.add_argument("--queries-per-cluster", type=int, default=3)
+    args = parser.parse_args()
+
+    m = run(args.seed, args.clusters, args.queries_per_cluster)
+    n_pairs = m["n_pairs"]
     print(f"\n🦅 raven-memory quality benchmark — seed={args.seed}, "
           f"{args.clusters} clusters × {PER_CLUSTER}, {n_pairs} contradiction pairs\n")
     rows = [
         ("recall@5 (cluster queries)",
-         f"{np.mean(rec_base):.3f}", f"{np.mean(rec_field):.3f}"),
+         f"{m['recall5_base']:.3f}", f"{m['recall5_field']:.3f}"),
         ("validated claim ranks first",
-         f"{val_first_base}/{n_pairs}", f"{val_first_field}/{n_pairs}"),
+         f"{m['val_first_base']}/{n_pairs}", f"{m['val_first_field']}/{n_pairs}"),
         ("contradiction suppressed from top-k",
-         f"{suppressed_base}/{n_pairs}", f"{suppressed_field}/{n_pairs}"),
+         f"{m['suppressed_base']}/{n_pairs}", f"{m['suppressed_field']}/{n_pairs}"),
         ("validated truth present (rescue)",
-         "n/a", f"{rescued}/{n_pairs}"),
+         "n/a", f"{m['rescued']}/{n_pairs}"),
     ]
     w = max(len(r[0]) for r in rows)
     print(f"{'metric':<{w}}  {'baseline top-k':>15}  {'raven field':>12}")

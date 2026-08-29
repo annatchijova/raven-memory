@@ -137,10 +137,12 @@ final_score = max(0.0, final_score)                       # never negative
 ```
 
 Every coefficient above is a named constant in `raven/memory_engine.py`
-(`HOP_LAMBDA = 0.15`, `RECENCY_HALFLIFE = 86400`, `RECENCY_WEIGHT = 0.05`, …),
-not a tuned magic number buried in a loop. Cosine is clamped to `[−1, 1]` at the
-source; the final score is clamped at zero so a distant, contradicted memory
-cannot go negative and poison the ranking.
+(`HOP_LAMBDA = 0.15`, `RESONANT_BOOST = 0.5`, `SYNAPTIC_SCORE_WEIGHT = 0.3`,
+`RECENCY_WEIGHT = 0.05`, `RECENCY_HALFLIFE = 86400`, …), not a tuned magic
+number buried in a loop — and their sensitivity is measured, not guessed
+([docs/HYPERPARAMS.md](docs/HYPERPARAMS.md)). Cosine is clamped to `[−1, 1]`
+at the source; the final score is clamped at zero so a distant, contradicted
+memory cannot go negative and poison the ranking.
 
 ---
 
@@ -414,21 +416,25 @@ python3 mcp_server.py    # stdio transport
 raven-memory/
 ├── run_all.py             One-command evaluation runner
 ├── api_server.py          FastAPI REST server (Swagger at /docs, WebSocket /ws)
-├── demo_killer.py         Gradio demo — 4 tabs, live MSS, collapse visualization
 ├── mcp_server.py          Model Context Protocol server (stdio)
-├── install.sh             Setup script (venv + dependencies)
-├── requirements.txt
+├── pyproject.toml         Package + extras + console scripts (raven-api, raven-mcp, …)
+├── requirements-lock.txt  Reproducible pins (light profile) — used by CI
 ├── Dockerfile
-├── raven/                 Core library
-│   ├── memory_engine.py   Adaptive memory field (KDTree, STDP, audit chain)
+├── raven/                 Core library (pip install raven-memory)
+│   ├── memory_engine.py   Adaptive memory field (index, STDP, audit chain)
 │   ├── spectral.py        SVD spectral field (eigenmodes, resonance, coherence)
 │   ├── qwen_client.py     Qwen Cloud client + MemoryAgentOrchestrator
-│   └── sleep_consolidator.py  Offline consolidation (agglomerative clustering)
+│   ├── sleep_consolidator.py  Consolidation (CLI + in-process hot reload)
+│   └── portability.py     Field export/import (JSONL, chain-verifying)
+├── demo/gradio_demo.py    Gradio demo — 4 tabs, live MSS, collapse visualization
+├── benchmarks/            perf.py, quality.py, sweep.py + measured RESULTS/QUALITY
 ├── tests/
 │   ├── test_suite.py      Integration tests (all P0 behaviors)
+│   ├── test_fixes.py      Regression tests for the v1.2 fixes
 │   └── demo_stress_test.py  Multi-phase adversarial stress test
+├── .github/workflows/     CI — pytest (3.11/3.12) + stress + Docker build
 ├── site/                  Static web (landing + interactive demo, EN/ZH)
-├── docs/                  DEPLOY, FIXES_v1.1, TEST_SESSIONS
+├── docs/                  DEPLOY, FIXES_v1.1, IMPROVEMENT_PLAN, HYPERPARAMS, …
 └── assets/                Demo slides (PNG)
 ```
 

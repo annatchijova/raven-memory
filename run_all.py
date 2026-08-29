@@ -89,7 +89,7 @@ def main():
         print("  Local URL  : http://localhost:7860")
         print("  Press Ctrl+C to stop")
         print(f"{'━'*66}")
-        subprocess.run([sys.executable, "demo_killer.py"])
+        subprocess.run([sys.executable, "demo/gradio_demo.py"])
 
     else:
         print(f"\n{'━'*66}")
