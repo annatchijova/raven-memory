@@ -267,6 +267,45 @@ def test_newer_schema_refuses_to_open(tmp_path):
 
 
 # ============================================================
+# 2.6 — pluggable ANN backend
+# ============================================================
+
+def test_hnsw_backend_matches_exact_results(tmp_path, monkeypatch):
+    pytest.importorskip("hnswlib")
+    embs = {f"m{i}": make_emb(f"ann_{i}") for i in range(50)}
+
+    def populate(eng):
+        ids = {}
+        for name, e in embs.items():
+            ids[eng.store(f"memoria {name}", e).memory_id] = name
+        return ids
+
+    exact = AdaptiveMemoryEngine(db_path=tmp_path / "exact.db")
+    populate(exact)
+    monkeypatch.setenv("RAVEN_ANN_BACKEND", "hnsw")
+    approx = AdaptiveMemoryEngine(db_path=tmp_path / "hnsw.db")
+    populate(approx)
+    assert approx._ann_backend == "hnsw"
+
+    for qi in range(10):
+        q = make_emb(f"ann_query_{qi}")
+        r_exact, _ = exact.recall(q, top_k=5, hops=2)
+        r_hnsw, _ = approx.recall(q, top_k=5, hops=2)
+        # Compare by content (memory_ids differ across engines).
+        c_exact = {r.memory.content for r in r_exact}
+        c_hnsw = {r.memory.content for r in r_hnsw}
+        assert len(c_exact & c_hnsw) >= 4, (
+            f"hnsw must agree with exact on ≥4/5 results, got {c_exact & c_hnsw}"
+        )
+
+
+def test_unknown_ann_backend_falls_back_to_kdtree(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_ANN_BACKEND", "faiss-inventado")
+    eng = AdaptiveMemoryEngine(db_path=tmp_path / "fb.db")
+    assert eng._ann_backend == "kdtree"
+
+
+# ============================================================
 # 3.1 — hot consolidation (no restart)
 # ============================================================
 
@@ -357,6 +396,89 @@ def test_audit_chain_verifies_mixed_legacy_and_v3_rows(engine):
     report = verify_audit_chain(engine.get_audit_trail())
     assert report["chain_intact"], f"linkage broken: {report['issues']}"
     assert report["hash_integrity"], f"legacy row failed recompute: {report['issues']}"
+
+
+# ============================================================
+# 1.3 — consolidator atomicity under fault injection
+# ============================================================
+
+def test_consolidation_rolls_back_atomically_on_failure(tmp_path, monkeypatch):
+    """A crash between INSERT and DELETE must leave the field untouched."""
+    import sqlite3
+    import raven.sleep_consolidator as sc
+
+    engine = AdaptiveMemoryEngine(db_path=tmp_path / "atomic.db")
+    base = make_emb("atomico")
+    for i in range(3):
+        engine.store("Contenido duplicado para consolidar en un solo nodo.",
+                     _near(base, seed=100 + i), layer="episodic")
+
+    class FailingConn(sqlite3.Connection):
+        def execute(self, sql, *args):
+            if sql.strip().upper().startswith("DELETE FROM MEMORIES"):
+                raise sqlite3.OperationalError("fault injection: crash mid-merge")
+            return super().execute(sql, *args)
+
+    real_connect = sc._connect
+    monkeypatch.setattr(
+        sc, "_connect",
+        lambda p: sqlite3.connect(p, timeout=5.0, factory=FailingConn))
+
+    with pytest.raises(sqlite3.OperationalError):
+        sc.run_consolidation(tmp_path / "atomic.db", threshold=0.8)
+
+    monkeypatch.setattr(sc, "_connect", real_connect)
+    mems = AdaptiveMemoryEngine(db_path=tmp_path / "atomic.db").list_memories(limit=10)
+    assert len(mems) == 3, "rollback must keep every source memory"
+    assert not any(m.memory_id.startswith("cons_") for m in mems), (
+        "rollback must remove the half-inserted consolidated node")
+
+
+# ============================================================
+# 3.2 — field export / import
+# ============================================================
+
+def test_export_import_roundtrip_preserves_recall_and_chain(tmp_path):
+    from raven.portability import export_field, import_field
+
+    src = AdaptiveMemoryEngine(db_path=tmp_path / "src.db")
+    base = make_emb("portable")
+    kept = src.store("memoria portátil validada con contenido suficiente",
+                     make_emb("portable"), metadata={"topic": "t", "claim": "A"})
+    src.store("otra memoria del corpus exportado", make_emb("otra"))
+    src.store("contradicción no verificada del mismo tema",
+              make_emb("contra"), metadata={"topic": "t", "claim": "B"})
+    src.reinforce(kept.memory_id)
+    src_results, _ = src.recall(base, top_k=5)
+
+    out = tmp_path / "field.jsonl"
+    exp = export_field(tmp_path / "src.db", out)
+    assert exp["memories"] == 3 and exp["cell_links"] >= 2 and exp["audit_log"] >= 1
+
+    imp = import_field(out, tmp_path / "dst.db")
+    assert imp["chain_intact"] and imp["hash_integrity"], imp["issues"]
+    assert imp["memories"] == 3
+
+    dst = AdaptiveMemoryEngine(db_path=tmp_path / "dst.db")
+    dst_results, _ = dst.recall(base, top_k=5)
+    assert ([r.memory.memory_id for r in src_results]
+            == [r.memory.memory_id for r in dst_results]), (
+        "the imported field must answer the same query identically")
+    assert dst_results[0].memory.state.name == "REINFORCED"
+
+
+def test_import_refuses_non_empty_target(tmp_path):
+    from raven.portability import export_field, import_field
+
+    src = AdaptiveMemoryEngine(db_path=tmp_path / "src.db")
+    src.store("memoria", make_emb("x"))
+    out = tmp_path / "field.jsonl"
+    export_field(tmp_path / "src.db", out)
+
+    other = AdaptiveMemoryEngine(db_path=tmp_path / "busy.db")
+    other.store("ya ocupada", make_emb("y"))
+    result = import_field(out, tmp_path / "busy.db")
+    assert "error" in result, "merging two fields would interleave two hash chains"
 
 
 # ============================================================

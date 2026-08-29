@@ -61,6 +61,15 @@ except ImportError:
 import numpy as np
 from scipy.spatial import KDTree
 
+# Plan 2.6: optional approximate-NN backend. KDTree in 384 dimensions
+# degenerates to near-brute-force, and building the k-NN neighbour graph
+# (one k-query per stored cell) dominates the first recall at scale.
+try:
+    import hnswlib  # type: ignore
+    _HNSW_AVAILABLE = True
+except ImportError:
+    _HNSW_AVAILABLE = False
+
 if not _SPECTRAL_AVAILABLE:
     # A missing optional module is a degradation the operator must be able
     # to see — resonance/coherence silently reading 0.0 is exactly the kind
@@ -1042,6 +1051,35 @@ def _synchronized(method):
     return wrapper
 
 
+class _HnswIndex:
+    """
+    scipy-KDTree-compatible facade over hnswlib (plan 2.6).
+
+    Same L2 metric as the KDTree (identical ordering for unit-norm vectors),
+    same .query() return shapes for the two call patterns the engine uses:
+    single-row seed lookup (k=1) and the batch k-NN graph build (k=k+1).
+    Approximate by nature — enable via RAVEN_ANN_BACKEND=hnsw when the
+    exact first-recall build cost matters more than exactness at the margin.
+    """
+
+    def __init__(self, arr: np.ndarray):
+        self._n, dim = arr.shape
+        self._index = hnswlib.Index(space="l2", dim=dim)
+        self._index.init_index(max_elements=self._n, ef_construction=200, M=16)
+        self._index.add_items(arr.astype(np.float32), np.arange(self._n))
+        self._index.set_ef(64)
+
+    def query(self, x: np.ndarray, k: int = 1):
+        x = np.asarray(x, dtype=np.float32)
+        if x.ndim == 1:
+            x = x.reshape(1, -1)
+        k = min(k, self._n)
+        labels, dists = self._index.knn_query(x, k=k)
+        if k == 1:
+            return dists[:, 0], labels[:, 0]
+        return dists, labels
+
+
 class AdaptiveMemoryEngine:
     """
     Raven-Memory core engine.
@@ -1059,7 +1097,23 @@ class AdaptiveMemoryEngine:
         self.embedding_dim = embedding_dim
         self.k_neighbors = k_neighbors
         self._db = MemoryStore(db_path)
-        self.kdtree: Optional[KDTree] = None
+        # Plan 2.6: pluggable NN index. "kdtree" (exact, default) or "hnsw"
+        # (approximate, needs hnswlib — raven-memory[ann]). An unavailable or
+        # unknown backend falls back LOUDLY to the exact default.
+        self._ann_backend = os.environ.get("RAVEN_ANN_BACKEND", "kdtree").lower()
+        if self._ann_backend == "hnsw" and not _HNSW_AVAILABLE:
+            logger.warning(
+                "RAVEN_ANN_BACKEND=hnsw but hnswlib is not installed "
+                "(pip install raven-memory[ann]) — falling back to exact KDTree"
+            )
+            self._ann_backend = "kdtree"
+        elif self._ann_backend not in ("kdtree", "hnsw"):
+            logger.warning(
+                f"Unknown RAVEN_ANN_BACKEND={self._ann_backend!r} — using exact KDTree"
+            )
+            self._ann_backend = "kdtree"
+        # Exact KDTree or _HnswIndex facade — same .query() surface for both.
+        self.kdtree = None
         self._points: Dict[int, np.ndarray] = {}     # cell_id → embedding (sparse)
         self._next_cell_id: int = 0                   # monotonic allocator
         self._cell_to_memid: Dict[int, str] = {}      # cell_id → memory_id (last stored per cell)
@@ -1200,7 +1254,7 @@ class AdaptiveMemoryEngine:
 
         self._kdtree_idx_to_cell = sorted(self._active_cells)
         arr = np.array([self._points[cid] for cid in self._kdtree_idx_to_cell])
-        self.kdtree = KDTree(arr)
+        self.kdtree = _HnswIndex(arr) if self._ann_backend == "hnsw" else KDTree(arr)
 
         k = min(self.k_neighbors, len(self._kdtree_idx_to_cell) - 1)
         if k <= 0:

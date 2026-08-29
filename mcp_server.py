@@ -174,6 +174,7 @@ def raven_recall(
     top_k: int = 5,
     hops: int = 2,
     layer_filter: str = "",
+    topic: str = "",
 ) -> dict:
     """
     Recall memories from the adaptive field using semantic similarity,
@@ -186,10 +187,18 @@ def raven_recall(
     - Co-activated pairs strengthen over time (STDP potentiation)
 
     Args:
+    The epistemic workflow this enables: store competing claims with the
+    same `topic` and different `claim` (auto-INHIBITORY links), reinforce
+    the one you validate, and recall — the field collapses around the
+    validated truth while the rescue rule guarantees a validated memory
+    can never be silenced by an unverified contradiction.
+
+    Args:
         query: Natural language query text to search for.
         top_k: Maximum number of results to return (1-50).
         hops: BFS expansion depth from the seed cell (0=exact match only, 2=default).
         layer_filter: Optional — only return memories from this layer.
+        topic: Optional — only return memories tagged with this topic.
 
     Returns:
         List of recalled memories with composite scores, hop distances,
@@ -213,6 +222,9 @@ def raven_recall(
         hops=hops,
         layer_filter=layer_filter or None,
     )
+    if topic:
+        results = [r for r in results
+                   if r.memory.metadata.get("topic") == topic]
 
     return {
         "count": len(results),
@@ -428,6 +440,29 @@ def raven_export_graph(max_nodes: int = 200) -> dict:
     max_nodes = max(1, min(int(max_nodes), 500))
     graph = _engine.export_graph(max_nodes=max_nodes)
     return graph
+
+
+@mcp.tool()
+def raven_verify_chain(limit: int = 1000) -> dict:
+    """
+    Full cryptographic verification of the audit hash chain: linkage
+    (prev_hash continuity) AND per-row hash recomputation from stored
+    columns. Distinct from raven_audit_trail, which lists recent entries —
+    this tool answers one question: has the audit log been tampered with?
+
+    Args:
+        limit: How many most-recent entries to verify (max 10000).
+
+    Returns:
+        chain_intact, hash_integrity, and the list of issues (empty = clean).
+    """
+    limit = max(1, min(int(limit), 10_000))
+    entries = _engine.get_audit_trail(limit=limit)
+    if not entries:
+        return {"entries_verified": 0, "chain_intact": True,
+                "hash_integrity": True, "issues": []}
+    report = verify_audit_chain(entries)
+    return {"entries_verified": len(entries), **report}
 
 
 @mcp.tool()

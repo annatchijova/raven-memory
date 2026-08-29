@@ -32,12 +32,16 @@ demo = ["gradio>=4.0.0"]
 consolidation = ["scikit-learn>=1.3.0"]
 # Model Context Protocol server.
 mcp = ["mcp>=1.0.0"]
+# Approximate-NN index for large corpora (RAVEN_ANN_BACKEND=hnsw).
+ann = ["hnswlib>=0.8.0"]
 test = ["pytest>=7.4.0", "httpx>=0.25.0"]
 
 [project.scripts]
 raven-api = "api_server:main"
 raven-mcp = "mcp_server:main"
 raven-consolidate = "raven.sleep_consolidator:main"
+raven-export = "raven.portability:main_export"
+raven-import = "raven.portability:main_import"
 
 [project.urls]
 Homepage = "https://github.com/annatchijova/raven-memory"
