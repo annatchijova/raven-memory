@@ -361,7 +361,7 @@ print("   * Average neighbors per cell: " + str(round(final_stats["avg_neighbors
 print("\nAudit Trail:")
 print("   * Total audit entries: " + str(len(audits)))
 if len(audits) >= 2:
-    from memory_engine import verify_audit_chain
+    from raven.memory_engine import verify_audit_chain
     report = verify_audit_chain(audits)
     status = "INTACT (linkage + hash recomputation)" if (
         report["chain_intact"] and report["hash_integrity"]) else f"BROKEN: {report['issues'][:2]}"

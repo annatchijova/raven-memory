@@ -18,11 +18,18 @@ import argparse
 import hashlib
 import json
 import sqlite3
+import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
+
+# When run as a loose script (`python raven/sleep_consolidator.py`), the
+# repo root is not on sys.path and the `raven` package cannot resolve.
+# `python -m raven.sleep_consolidator` and package imports need no help.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Same canonical hash scheme as the engine — the consolidation entry must be
 # verifiable by memory_engine.verify_audit_chain() like any recall entry.
@@ -372,14 +379,95 @@ def log_consolidation(db_path: Path, processed: int, merged: int, created: int):
 
 
 # ============================================================
-# MAIN
+# PROGRAMMATIC ENTRY POINT (plan 3.1)
+# ============================================================
+
+def run_consolidation(
+    db_path: Path,
+    threshold: float = 0.85,
+    dry_run: bool = False,
+    rebuild_spectral: bool = True,
+) -> Dict:
+    """
+    Run one consolidation pass and return structured stats.
+
+    Extracted from the CLI so the engine can run consolidation in-process
+    (AdaptiveMemoryEngine.consolidate() → POST /consolidate) and reload its
+    in-memory structures afterwards — no server restart required. The CLI
+    below remains the offline path; after CLI use against a live engine,
+    that engine must still be restarted/reloaded.
+    """
+    db_path = Path(db_path)
+    if not db_path.exists():
+        return {"error": f"Database not found: {db_path}"}
+
+    memories = load_episodic_neutral(db_path)
+    result: Dict = {
+        "threshold": threshold,
+        "dry_run": dry_run,
+        "processed": len(memories),
+        "merged": 0,
+        "created": 0,
+        "groups": [],
+    }
+    if len(memories) < 2:
+        return result
+
+    counts = get_recall_counts(db_path, [m["memory_id"] for m in memories])
+    for m in memories:
+        m["recall_count"] = counts.get(m["memory_id"], 0)
+
+    groups = cluster_by_similarity(memories, threshold)
+    mergeable = [g for g in groups if len(g) > 1]
+    result["singletons"] = len(groups) - len(mergeable)
+    result["groups"] = [
+        {
+            "size": len(g),
+            "total_recalls": sum(counts.get(m["memory_id"], 0) for m in g),
+            "previews": [m["content"][:70] for m in g],
+        }
+        for g in mergeable
+    ]
+    if not mergeable or dry_run:
+        return result
+
+    nodes = []
+    for group in mergeable:
+        node = merge_group(group, counts)
+        # P0: insert + delete + cell-link cascade in ONE transaction.
+        mem_id, cell_id = apply_consolidation(db_path, node)
+        result["merged"] += len(group)
+        result["created"] += 1
+        nodes.append({"memory_id": mem_id, "cell_id": cell_id, "size": len(group)})
+    result["nodes"] = nodes
+
+    log_consolidation(db_path, len(memories), result["merged"], result["created"])
+
+    if rebuild_spectral:
+        # After consolidation the active-memory set changed: old episodic
+        # clusters became consolidated semantic nodes, so the eigen-modes must
+        # be rebuilt. Callers that own a live engine (engine.consolidate())
+        # pass rebuild_spectral=False and rebuild through the engine instead.
+        try:
+            from raven.spectral import build_and_persist_spectral_field
+            spec = build_and_persist_spectral_field(db_path)
+            result["spectral"] = spec.summary() if (spec and spec.is_built) else "skipped"
+        except ImportError:
+            result["spectral"] = "module not found"
+        except Exception as _e:
+            result["spectral"] = f"error: {_e}"
+
+    return result
+
+
+# ============================================================
+# MAIN (CLI — offline path)
 # ============================================================
 
 def main():
-    # P0-2 design note: this script touches SQLite directly while the engine
-    # may be running in another process. After consolidation, restart the engine
-    # so its in-memory KDTree, _points, and _topic_index reflect the new state.
-    # Future versions will expose a /consolidate endpoint to do this atomically.
+    # Design note: the CLI touches SQLite directly while an engine may be
+    # running in another process — restart/reload that engine afterwards.
+    # For a live server, use POST /consolidate (in-process, reloads itself).
     parser = argparse.ArgumentParser(description="raven-memory Sleep Consolidator")
     parser.add_argument("--threshold", type=float, default=0.85,
                         help="Cosine similarity threshold for clustering (default: 0.85)")
@@ -390,90 +478,48 @@ def main():
     args = parser.parse_args()
 
     db_path = Path(args.db)
-    if not db_path.exists():
-        print(f"❌ Database not found: {db_path}")
-        return
-
     print(f"\n🌙 Sleep Consolidator")
     print(f"   DB path   : {db_path}")
     print(f"   Threshold : {args.threshold}")
     print(f"   Dry-run   : {args.dry_run}")
 
-    # Load
-    memories = load_episodic_neutral(db_path)
-    print(f"\n📥  Loaded {len(memories)} episodic NEUTRAL memories")
+    size_before = db_path.stat().st_size if db_path.exists() else 0
+    result = run_consolidation(db_path, threshold=args.threshold, dry_run=args.dry_run)
 
-    if len(memories) < 2:
+    if "error" in result:
+        print(f"❌ {result['error']}")
+        return
+
+    print(f"\n📥  Loaded {result['processed']} episodic NEUTRAL memories")
+    if result["processed"] < 2:
         print("✅  Nothing to consolidate (< 2 memories).")
         return
 
-    # Recall counts
-    counts = get_recall_counts(db_path, [m["memory_id"] for m in memories])
-    for m in memories:
-        m["recall_count"] = counts.get(m["memory_id"], 0)
-
-    # Cluster
-    groups = cluster_by_similarity(memories, args.threshold)
-    mergeable = [g for g in groups if len(g) > 1]
-    singletons = len(groups) - len(mergeable)
-
-    print(f"🔬  Formed {len(groups)} clusters:")
+    mergeable = result["groups"]
+    print(f"🔬  Formed {len(mergeable) + result.get('singletons', 0)} clusters:")
     print(f"     • {len(mergeable)} mergeable groups")
-    print(f"     • {singletons} singletons (unchanged)")
-
+    print(f"     • {result.get('singletons', 0)} singletons (unchanged)")
     if not mergeable:
         print("✅  No groups meet the merge threshold.")
         return
 
-    # Preview
     print()
     for i, group in enumerate(mergeable, 1):
-        total_recalls = sum(counts.get(m["memory_id"], 0) for m in group)
-        print(f"  Group {i} ({len(group)} memories, {total_recalls} total recalls):")
-        for m in group:
-            print(f"    [{counts.get(m['memory_id'], 0):3d} recalls]  {m['content'][:70]}…")
+        print(f"  Group {i} ({group['size']} memories, {group['total_recalls']} total recalls):")
+        for preview in group["previews"]:
+            print(f"    {preview}…")
 
     if args.dry_run:
         print("\n🔍  Dry-run — no changes made.")
         return
 
-    # Merge
-    size_before = db_path.stat().st_size
-    total_merged = 0
-    total_created = 0
-
-    for group in mergeable:
-        node = merge_group(group, counts)
-        # P0: insert + delete + cell-link cascade in ONE transaction.
-        mem_id, cell_id = apply_consolidation(db_path, node)
-        total_merged += len(group)
-        total_created += 1
-        print(f"   ✅  {len(group)} → {mem_id[:24]}… (cell {cell_id})")
-
-    size_after = db_path.stat().st_size
-    log_consolidation(db_path, len(memories), total_merged, total_created)
+    for node in result.get("nodes", []):
+        print(f"   ✅  {node['size']} → {node['memory_id'][:24]}… (cell {node['cell_id']})")
 
     print(f"\n☀️  Consolidation complete.")
-    print(f"   Merged   : {total_merged} memories → {total_created} nodes")
-    print(f"   DB size  : {size_before / 1024:.1f} KB → {size_after / 1024:.1f} KB")
-
-    # ---- Spectral field rebuild ------------------------------------------------
-    # After consolidation the active-memory set changed: old episodic clusters
-    # were replaced by consolidated semantic nodes. The spectral field must be
-    # rebuilt so future recalls use eigen-modes that reflect the new field state.
-    # This is an offline step — no running engine to notify.
-    print("\n   Spectral field rebuild...")
-    try:
-        from spectral import build_and_persist_spectral_field
-        spec = build_and_persist_spectral_field(db_path)
-        if spec and spec.is_built:
-            print(f"   {spec.summary()}")
-        else:
-            print("   Spectral rebuild skipped (fewer than 2 active memories)")
-    except ImportError:
-        print("   spectral module not found — skipping spectral rebuild")
-    except Exception as _e:
-        print(f"   Spectral rebuild error: {_e}")
+    print(f"   Merged   : {result['merged']} memories → {result['created']} nodes")
+    print(f"   DB size  : {size_before / 1024:.1f} KB → {db_path.stat().st_size / 1024:.1f} KB")
+    print(f"   Spectral : {result.get('spectral', 'n/a')}")
 
 
 if __name__ == "__main__":

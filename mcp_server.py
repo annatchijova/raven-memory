@@ -52,7 +52,7 @@ from raven.memory_engine import (
     LinkType,
     verify_audit_chain,
 )
-from raven.qwen_client import EmbeddingProvider, QwenConfig
+from raven.qwen_client import EmbeddingProvider, QwenConfig, resolve_dashscope_api_key
 
 log = logging.getLogger("raven.mcp")
 logging.basicConfig(
@@ -67,13 +67,20 @@ mcp = FastMCP("raven-memory")
 _DB_PATH = Path(os.environ.get("RAVEN_DB_PATH", "raven_memory.db"))
 _engine = AdaptiveMemoryEngine(db_path=_DB_PATH)
 
-# Embedding provider — three-tier fallback (local > API > dummy)
+# Embedding provider — three-tier fallback (local > API > dummy).
+# P1: this used to read only QWEN_API_KEY while the rest of the project
+# (and all the docs) use DASHSCOPE_API_KEY — following the README gave the
+# MCP server dummy embeddings silently. resolve_dashscope_api_key() accepts
+# both, canonical name first.
 _qwen_config = QwenConfig(
-    api_key=os.environ.get("QWEN_API_KEY", ""),
+    api_key=resolve_dashscope_api_key(),
     use_local_embeddings=True,
     embedding_dim=_engine.embedding_dim,
 )
 _embedder = EmbeddingProvider(_qwen_config)
+log.info("Embedding tier at startup: %s (API key %s)",
+         _embedder.active_provider,
+         "configured" if _qwen_config.api_key else "not set")
 
 # -- Input limits (VIGIA/CORVUS pattern) ------------------------------------
 
@@ -167,6 +174,7 @@ def raven_recall(
     top_k: int = 5,
     hops: int = 2,
     layer_filter: str = "",
+    topic: str = "",
 ) -> dict:
     """
     Recall memories from the adaptive field using semantic similarity,
@@ -179,10 +187,18 @@ def raven_recall(
     - Co-activated pairs strengthen over time (STDP potentiation)
 
     Args:
+    The epistemic workflow this enables: store competing claims with the
+    same `topic` and different `claim` (auto-INHIBITORY links), reinforce
+    the one you validate, and recall — the field collapses around the
+    validated truth while the rescue rule guarantees a validated memory
+    can never be silenced by an unverified contradiction.
+
+    Args:
         query: Natural language query text to search for.
         top_k: Maximum number of results to return (1-50).
         hops: BFS expansion depth from the seed cell (0=exact match only, 2=default).
         layer_filter: Optional — only return memories from this layer.
+        topic: Optional — only return memories tagged with this topic.
 
     Returns:
         List of recalled memories with composite scores, hop distances,
@@ -206,6 +222,9 @@ def raven_recall(
         hops=hops,
         layer_filter=layer_filter or None,
     )
+    if topic:
+        results = [r for r in results
+                   if r.memory.metadata.get("topic") == topic]
 
     return {
         "count": len(results),
@@ -424,6 +443,52 @@ def raven_export_graph(max_nodes: int = 200) -> dict:
 
 
 @mcp.tool()
+def raven_verify_chain(limit: int = 1000) -> dict:
+    """
+    Full cryptographic verification of the audit hash chain: linkage
+    (prev_hash continuity) AND per-row hash recomputation from stored
+    columns. Distinct from raven_audit_trail, which lists recent entries —
+    this tool answers one question: has the audit log been tampered with?
+
+    Args:
+        limit: How many most-recent entries to verify (max 10000).
+
+    Returns:
+        chain_intact, hash_integrity, and the list of issues (empty = clean).
+    """
+    limit = max(1, min(int(limit), 10_000))
+    entries = _engine.get_audit_trail(limit=limit)
+    if not entries:
+        return {"entries_verified": 0, "chain_intact": True,
+                "hash_integrity": True, "issues": []}
+    report = verify_audit_chain(entries)
+    return {"entries_verified": len(entries), **report}
+
+
+@mcp.tool()
+def raven_consolidate(threshold: float = 0.85, dry_run: bool = True) -> dict:
+    """
+    Sleep consolidation: merge near-duplicate episodic NEUTRAL memories into
+    consolidated semantic nodes (agglomerative cosine clustering), then
+    hot-reload the field — no restart needed.
+
+    The merged node gets a recall-frequency-weighted centroid embedding and
+    an extractive summary; the operation is atomic and continues the audit
+    hash chain. Defaults to dry_run=True so an agent previews the clusters
+    before committing a destructive-ish merge.
+
+    Args:
+        threshold: Cosine similarity threshold for clustering (0.5-0.99).
+        dry_run: If True (default), only preview what would be merged.
+
+    Returns:
+        processed / merged / created counts and per-group previews.
+    """
+    threshold = max(0.5, min(float(threshold), 0.99))
+    return _engine.consolidate(threshold=threshold, dry_run=bool(dry_run))
+
+
+@mcp.tool()
 def raven_info() -> dict:
     """
     Describe raven-memory's architecture, scoring formula, and field dynamics.
@@ -468,7 +533,12 @@ def raven_info() -> dict:
 
 # -- Entry point --------------------------------------------------------------
 
-if __name__ == "__main__":
+def main():
+    """Console entry point (`raven-mcp`, or `python mcp_server.py`)."""
     log.info("raven-memory MCP server starting — db=%s, provider=%s",
              _DB_PATH, _embedder.active_provider)
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

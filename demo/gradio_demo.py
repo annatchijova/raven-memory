@@ -15,11 +15,17 @@ License: Apache 2.0
 """
 
 import json
+import sys
 import time
 from pathlib import Path
 
 import gradio as gr
 import numpy as np
+
+# Runnable both installed (pip install raven-memory[demo]) and as a loose
+# script (`python demo/gradio_demo.py` from the repo root).
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from raven.memory_engine import AdaptiveMemoryEngine, MemoryState, LinkType
 from raven.qwen_client import MemoryAgentOrchestrator, QwenConfig

@@ -137,10 +137,12 @@ final_score = max(0.0, final_score)                       # never negative
 ```
 
 Every coefficient above is a named constant in `raven/memory_engine.py`
-(`HOP_LAMBDA = 0.15`, `RECENCY_HALFLIFE = 86400`, `RECENCY_WEIGHT = 0.05`, …),
-not a tuned magic number buried in a loop. Cosine is clamped to `[−1, 1]` at the
-source; the final score is clamped at zero so a distant, contradicted memory
-cannot go negative and poison the ranking.
+(`HOP_LAMBDA = 0.15`, `RESONANT_BOOST = 0.5`, `SYNAPTIC_SCORE_WEIGHT = 0.3`,
+`RECENCY_WEIGHT = 0.05`, `RECENCY_HALFLIFE = 86400`, …), not a tuned magic
+number buried in a loop — and their sensitivity is measured, not guessed
+([docs/HYPERPARAMS.md](docs/HYPERPARAMS.md)). Cosine is clamped to `[−1, 1]`
+at the source; the final score is clamped at zero so a distant, contradicted
+memory cannot go negative and poison the ranking.
 
 ---
 
@@ -278,19 +280,24 @@ it — it warns loudly and still appends, so the break stays discoverable.
 
 Every stored document is fingerprinted: function-word frequencies (EN/ES/shared
 sets), average sentence length, a punctuation profile, detected language, and a
-16-char fingerprint hash. On recall (for texts of ≥15 words), a new observation
-is compared against the author's historical profile using a weighted distance:
+16-char fingerprint hash. The author's historical profile is a **rolling mean
+over their last 10 samples, kept separately per language** — not a single
+arbitrary first sample — and no verdict is issued until the profile holds at
+least 3 samples (`RAVEN_STYLO_MIN_SAMPLES`). On recall (for texts of ≥15
+words), a new observation is compared against that profile using a weighted
+distance:
 
 ```
 distance = 0.5·(1 − cos_functionwords) + 0.3·|Δ sentence_length| + 0.2·(1 − cos_punctuation)
 ```
 
-If `distance > 0.5` (the forensic threshold), the memory is **downgraded to
-`FORGOTTEN`**, a forensic alert is stored, and it is pulled from the active
-field — an impostor writing under a trusted author's name is quarantined. And it
-is **language-aware**: a confirmed language switch skips the comparison, so a
-bilingual author is never flagged as a tamperer for writing in Spanish one day
-and English the next.
+If `distance > 0.5` (the forensic threshold), a **forensic alert is stored**.
+Quarantining — downgrading the memory to `FORGOTTEN` and pulling it from the
+active field — is **opt-in** via `RAVEN_STYLO_ENFORCE=1`: detection and action
+are separate concerns, and a recall should not destroy state by default.
+Because profiles are per-language, a bilingual author is compared only against
+their own history in the same language — never flagged as a tamperer for
+writing in Spanish one day and English the next.
 
 ---
 
@@ -378,6 +385,7 @@ python3 mcp_server.py    # stdio transport
 | `raven_reinforce` | Mark a memory as validated truth (×1.5 boost) |
 | `raven_forget` | Exclude a memory from recall (preserved, not deleted) |
 | `raven_create_link` | Create a RESONANT or INHIBITORY cell link |
+| `raven_consolidate` | Sleep consolidation with hot reload (dry-run by default) |
 | `raven_get_memory` | Fetch a single memory by ID |
 | `raven_stats` | Engine telemetry (MSS, cells, links, state distribution) |
 | `raven_audit_trail` | Tamper-evident hash-chain verification |
@@ -408,21 +416,25 @@ python3 mcp_server.py    # stdio transport
 raven-memory/
 ├── run_all.py             One-command evaluation runner
 ├── api_server.py          FastAPI REST server (Swagger at /docs, WebSocket /ws)
-├── demo_killer.py         Gradio demo — 4 tabs, live MSS, collapse visualization
 ├── mcp_server.py          Model Context Protocol server (stdio)
-├── install.sh             Setup script (venv + dependencies)
-├── requirements.txt
+├── pyproject.toml         Package + extras + console scripts (raven-api, raven-mcp, …)
+├── requirements-lock.txt  Reproducible pins (light profile) — used by CI
 ├── Dockerfile
-├── raven/                 Core library
-│   ├── memory_engine.py   Adaptive memory field (KDTree, STDP, audit chain)
+├── raven/                 Core library (pip install raven-memory)
+│   ├── memory_engine.py   Adaptive memory field (index, STDP, audit chain)
 │   ├── spectral.py        SVD spectral field (eigenmodes, resonance, coherence)
 │   ├── qwen_client.py     Qwen Cloud client + MemoryAgentOrchestrator
-│   └── sleep_consolidator.py  Offline consolidation (agglomerative clustering)
+│   ├── sleep_consolidator.py  Consolidation (CLI + in-process hot reload)
+│   └── portability.py     Field export/import (JSONL, chain-verifying)
+├── demo/gradio_demo.py    Gradio demo — 4 tabs, live MSS, collapse visualization
+├── benchmarks/            perf.py, quality.py, sweep.py + measured RESULTS/QUALITY
 ├── tests/
 │   ├── test_suite.py      Integration tests (all P0 behaviors)
+│   ├── test_fixes.py      Regression tests for the v1.2 fixes
 │   └── demo_stress_test.py  Multi-phase adversarial stress test
+├── .github/workflows/     CI — pytest (3.11/3.12) + stress + Docker build
 ├── site/                  Static web (landing + interactive demo, EN/ZH)
-├── docs/                  DEPLOY, FIXES_v1.1, TEST_SESSIONS
+├── docs/                  DEPLOY, FIXES_v1.1, IMPROVEMENT_PLAN, HYPERPARAMS, …
 └── assets/                Demo slides (PNG)
 ```
 
@@ -481,12 +493,17 @@ POST   /recall                      Semantic recall with field dynamics
 POST   /memories/{id}/reinforce     Set state = REINFORCED
 POST   /memories/{id}/forget        Set state = FORGOTTEN
 POST   /cell-links                  Create a RESONANT/INHIBITORY link
+POST   /consolidate                 Sleep consolidation, in-process (no restart)
 GET    /graph                       Export the memory graph (nodes + edges)
 GET    /stats                       Engine stats + MSS
+GET    /metrics                     Prometheus exposition (text format)
 GET    /audit                       Hash-chain audit trail
 GET    /alerts                      Forensic tamper alerts
 WS     /ws                          Real-time event stream
 ```
+
+`/recall` accepts a `session_id` — conversation history and STDP turn signals
+are isolated per session.
 
 Full interactive docs at **http://localhost:8000/docs**
 
@@ -497,6 +514,24 @@ by another local service, set `RAVEN_API_PORT` before launching:
 export RAVEN_API_PORT=8010
 python run_all.py --api        # → http://localhost:8010/docs
 ```
+
+---
+
+## Measured, not claimed
+
+The field's advantage over plain top-k is benchmarked, not asserted
+([full tables + methodology](benchmarks/QUALITY.md),
+[perf numbers](benchmarks/RESULTS.md)):
+
+| Metric (synthetic corpus, known ground truth) | plain top-k | raven field |
+|---|---:|---:|
+| recall@5 on cluster queries | 0.57–0.59 | **0.69** |
+| user-validated claim outranks its contradiction | 7–12 / 20 | **20 / 20** |
+| validated truth silenced by an unverified claim | n/a | **0 / 20** |
+
+Recall p50 at 5,000 memories: **24 ms** (was 128 ms before the Fase-2
+optimizations); audit entries: **2.8 KB** each (was 11.2 KB).
+Reproduce with `python benchmarks/quality.py` and `python benchmarks/perf.py`.
 
 ---
 
@@ -535,6 +570,29 @@ A 55-finding internal audit plus external review, all resolved:
   query from the LLM window.
 
 Full fix map: [FIXES_v1.1.md](docs/FIXES_v1.1.md)
+
+### v1.2 hardening (from the [improvement plan](docs/IMPROVEMENT_PLAN.md))
+
+- **Spectral field actually loads** — a package-relative import bug had
+  silently disabled resonance/coherence in every real entry point; a missing
+  spectral module now logs a WARNING, never a silent 0.0.
+- **Non-blocking API** — embedding + Qwen calls run off the event loop;
+  one slow recall no longer freezes the whole server.
+- **Per-session isolation** — conversation history and STDP turn signals are
+  keyed by `session_id` (new field on `/recall`); concurrent users no longer
+  share a conversation.
+- **Cache correctness** — the `/recall` cache is invalidated on every field
+  mutation, TTL-bounded, LRU-capped, and never caches degraded results.
+- **Auth on reads** — with `RAVEN_API_TOKEN` set, read endpoints require the
+  token too; constant-time token comparison; `X-Forwarded-For` honoured only
+  with `RAVEN_TRUST_PROXY=1`; `/health` no longer leaks config when auth is on.
+- **Stylometric forensics rebuilt** — rolling per-(author, language) profile,
+  minimum-sample gate, alert-only by default (`RAVEN_STYLO_ENFORCE=1` to
+  quarantine).
+- **One API key story** — `DASHSCOPE_API_KEY` works everywhere, including the
+  MCP server (`QWEN_API_KEY` kept as a legacy alias).
+- **CI** — GitHub Actions runs the full suite (35 tests) on Python 3.11/3.12
+  plus the adversarial stress test and a Docker build on every push.
 
 ---
 

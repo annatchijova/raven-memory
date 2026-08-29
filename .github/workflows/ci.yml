@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      # Light install from the lock: the suites run on deterministic dummy
+      # embeddings, so torch + sentence-transformers (multi-GB) stay out of
+      # CI on purpose. The lock keeps runs reproducible; -e . installs the
+      # raven package itself without re-resolving dependencies.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-lock.txt
+          pip install -e . --no-deps
+
+      - name: Unit & regression tests (pytest)
+        run: pytest -q
+
+      - name: Adversarial stress test
+        run: python tests/demo_stress_test.py
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t raven-memory:ci .
