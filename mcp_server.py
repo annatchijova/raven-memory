@@ -475,7 +475,12 @@ def raven_info() -> dict:
 
 # -- Entry point --------------------------------------------------------------
 
-if __name__ == "__main__":
+def main():
+    """Console entry point (`raven-mcp`, or `python mcp_server.py`)."""
     log.info("raven-memory MCP server starting — db=%s, provider=%s",
              _DB_PATH, _embedder.active_provider)
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

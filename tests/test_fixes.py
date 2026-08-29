@@ -216,6 +216,57 @@ def test_profile_mean_is_average_of_samples():
 
 
 # ============================================================
+# 1.4 — versioned schema migrations
+# ============================================================
+
+def test_schema_versioning_migrates_legacy_db(tmp_path):
+    """A pre-versioning DB (user_version=0, no recall_count) upgrades in place."""
+    import sqlite3
+    from raven.memory_engine import MemoryStore, SCHEMA_VERSION
+
+    db = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db)
+    conn.execute("""
+        CREATE TABLE memories (
+            memory_id TEXT PRIMARY KEY, layer TEXT NOT NULL,
+            content TEXT NOT NULL, content_hash TEXT NOT NULL,
+            embedding BLOB NOT NULL, state TEXT NOT NULL,
+            cell_id INTEGER NOT NULL, created_at REAL NOT NULL,
+            session_id TEXT NOT NULL, author_id TEXT NOT NULL,
+            metadata TEXT, synaptic_links TEXT,
+            last_activation REAL DEFAULT 0.0, fingerprint TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+    MemoryStore(db)   # opening runs the migrations
+
+    conn = sqlite3.connect(db)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(memories)")]
+    assert "recall_count" in cols, "v2 migration must add the column"
+    indexes = [r[1] for r in conn.execute("PRAGMA index_list(memories)")]
+    assert "uq_mem_cell_id" in indexes, "v2 migration must enforce UNIQUE(cell_id)"
+    conn.close()
+
+
+def test_newer_schema_refuses_to_open(tmp_path):
+    """Old code must fail loudly on a DB from a newer version, not run over it."""
+    import sqlite3
+    from raven.memory_engine import MemoryStore
+
+    db = tmp_path / "future.db"
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA user_version = 99")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match="upgrade raven-memory"):
+        MemoryStore(db)
+
+
+# ============================================================
 # API server — 0.2 event loop, 0.3 cache, 0.5 auth
 # ============================================================
 

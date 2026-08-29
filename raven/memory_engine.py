@@ -464,6 +464,13 @@ class AuthorStyleProfile:
 # SQLITE STORE
 # ============================================================
 
+# Bump when the schema changes and add a numbered block in _init_db.
+# Pre-versioning v1.0/v1.1 databases report user_version=0; every migration
+# block is idempotent (IF NOT EXISTS / tolerated ALTER), so they upgrade in
+# place without a separate tool.
+SCHEMA_VERSION = 2
+
+
 class MemoryStore:
     def __init__(self, db_path: Path = DB_PATH):
         self.db_path = db_path
@@ -490,82 +497,98 @@ class MemoryStore:
             # (durable at checkpoint, ~an order of magnitude faster).
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS memories (
-                    memory_id TEXT PRIMARY KEY,
-                    layer TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    content_hash TEXT NOT NULL,
-                    embedding BLOB NOT NULL,
-                    state TEXT NOT NULL,
-                    cell_id INTEGER NOT NULL UNIQUE,
-                    created_at REAL NOT NULL,
-                    session_id TEXT NOT NULL,
-                    author_id TEXT NOT NULL,
-                    metadata TEXT,
-                    synaptic_links TEXT,
-                    last_activation REAL DEFAULT 0.0,
-                    recall_count INTEGER DEFAULT 0,
-                    fingerprint TEXT
-                )
-            """)
-            # Add recall_count column if it doesn't exist (migration)
-            try:
-                conn.execute("ALTER TABLE memories ADD COLUMN recall_count INTEGER DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
 
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS cell_links (
-                    from_cell_id INTEGER,
-                    to_cell_id INTEGER,
-                    link_type TEXT,
-                    created_at REAL,
-                    auto_generated INTEGER,
-                    PRIMARY KEY (from_cell_id, to_cell_id)
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if version > SCHEMA_VERSION:
+                # Honest failure beats silently running old code over a newer
+                # layout it does not understand.
+                raise RuntimeError(
+                    f"Database schema is v{version} but this code supports up to "
+                    f"v{SCHEMA_VERSION} — upgrade raven-memory before opening this DB."
                 )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS audit_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp REAL NOT NULL,
-                    operation TEXT NOT NULL,
-                    query_text TEXT,
-                    query_embedding BLOB,
-                    cells_activated TEXT,
-                    memories_retrieved TEXT,
-                    total_candidates INTEGER,
-                    filtered_by_state INTEGER,
-                    filtered_by_estilometria INTEGER,
-                    filtered_by_inhibitory INTEGER,
-                    synaptic_activated INTEGER,
-                    returned_to_agent INTEGER,
-                    audit_hash TEXT,
-                    prev_hash TEXT
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS forensic_alerts (
-                    alert_id TEXT PRIMARY KEY,
-                    timestamp REAL NOT NULL,
-                    memory_id TEXT NOT NULL,
-                    detected_author TEXT,
-                    expected_author TEXT,
-                    mismatch_score REAL,
-                    action_taken TEXT
-                )
-            """)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_cell   ON memories(cell_id)")
-            # Migration: enforce UNIQUE on cell_id for DBs created before this constraint.
-            try:
+
+            if version < 1:
+                # ---- v1: baseline schema.
+                # Idempotent on purpose: v1.0/v1.1 DBs predate user_version
+                # (they report 0) but already contain these tables.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS memories (
+                        memory_id TEXT PRIMARY KEY,
+                        layer TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        content_hash TEXT NOT NULL,
+                        embedding BLOB NOT NULL,
+                        state TEXT NOT NULL,
+                        cell_id INTEGER NOT NULL UNIQUE,
+                        created_at REAL NOT NULL,
+                        session_id TEXT NOT NULL,
+                        author_id TEXT NOT NULL,
+                        metadata TEXT,
+                        synaptic_links TEXT,
+                        last_activation REAL DEFAULT 0.0,
+                        recall_count INTEGER DEFAULT 0,
+                        fingerprint TEXT
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS cell_links (
+                        from_cell_id INTEGER,
+                        to_cell_id INTEGER,
+                        link_type TEXT,
+                        created_at REAL,
+                        auto_generated INTEGER,
+                        PRIMARY KEY (from_cell_id, to_cell_id)
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS audit_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp REAL NOT NULL,
+                        operation TEXT NOT NULL,
+                        query_text TEXT,
+                        query_embedding BLOB,
+                        cells_activated TEXT,
+                        memories_retrieved TEXT,
+                        total_candidates INTEGER,
+                        filtered_by_state INTEGER,
+                        filtered_by_estilometria INTEGER,
+                        filtered_by_inhibitory INTEGER,
+                        synaptic_activated INTEGER,
+                        returned_to_agent INTEGER,
+                        audit_hash TEXT,
+                        prev_hash TEXT
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS forensic_alerts (
+                        alert_id TEXT PRIMARY KEY,
+                        timestamp REAL NOT NULL,
+                        memory_id TEXT NOT NULL,
+                        detected_author TEXT,
+                        expected_author TEXT,
+                        mismatch_score REAL,
+                        action_taken TEXT
+                    )
+                """)
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_cell   ON memories(cell_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_layer  ON memories(layer)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_author ON memories(author_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_state  ON memories(state)")
+
+            if version < 2:
+                # ---- v2: recall_count column + hard UNIQUE on cell_id
+                # (previously ad-hoc try/except migrations).
+                try:
+                    conn.execute(
+                        "ALTER TABLE memories ADD COLUMN recall_count INTEGER DEFAULT 0"
+                    )
+                except sqlite3.OperationalError:
+                    pass  # column already exists (fresh v1 table carries it)
                 conn.execute(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_mem_cell_id ON memories(cell_id)"
                 )
-            except sqlite3.OperationalError:
-                pass
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_layer  ON memories(layer)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_author ON memories(author_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_state  ON memories(state)")
+
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             conn.commit()
 
     def _load_prev_hash(self):

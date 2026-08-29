@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "raven-memory"
+version = "1.2.0"
+description = "Adaptive memory field for agentic systems — ternary states, STDP dynamics, tamper-evident audit chain"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Anna Tchijova (VIGÍA AI Collective)" }]
+requires-python = ">=3.10"
+# Core = the memory engine itself. Everything network- or UI-shaped is an extra.
+dependencies = [
+    "numpy>=1.24.0",
+    "scipy>=1.11.0",
+]
+
+[project.optional-dependencies]
+# Real semantic embeddings, fully offline (multi-GB: torch).
+local-embeddings = ["sentence-transformers>=2.2.0", "torch>=2.0.0"]
+# REST API server + Qwen Cloud client.
+api = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.5.0",
+    "requests>=2.31.0",
+]
+# Gradio interactive demo.
+demo = ["gradio>=4.0.0"]
+# Sleep consolidation (agglomerative clustering).
+consolidation = ["scikit-learn>=1.3.0"]
+# Model Context Protocol server.
+mcp = ["mcp>=1.0.0"]
+test = ["pytest>=7.4.0", "httpx>=0.25.0"]
+
+[project.scripts]
+raven-api = "api_server:main"
+raven-mcp = "mcp_server:main"
+raven-consolidate = "raven.sleep_consolidator:main"
+
+[project.urls]
+Homepage = "https://github.com/annatchijova/raven-memory"
+
+[tool.setuptools]
+packages = ["raven"]
+py-modules = ["api_server", "mcp_server"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# demo_stress_test.py is a script (runs at import) — never collect it.
+python_files = ["test_suite.py", "test_fixes.py", "test_*.py"]
+addopts = "--ignore=tests/demo_stress_test.py"

@@ -675,7 +675,8 @@ async def websocket_endpoint(ws: WebSocket):
 # ENTRYPOINT
 # ============================================================
 
-if __name__ == "__main__":
+def main():
+    """Console entry point (`raven-api`, or `python api_server.py`)."""
     _port = int(os.environ.get("RAVEN_API_PORT", "8000"))
     print("\n🦅 raven-memory API Server")
     print(f"   Swagger UI: http://localhost:{_port}/docs")
@@ -683,3 +684,7 @@ if __name__ == "__main__":
     print(f"   WebSocket:  ws://localhost:{_port}/ws")
     print()
     uvicorn.run("api_server:app", host="0.0.0.0", port=_port, reload=False, log_level="info")
+
+
+if __name__ == "__main__":
+    main()
