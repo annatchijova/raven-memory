@@ -431,6 +431,29 @@ def raven_export_graph(max_nodes: int = 200) -> dict:
 
 
 @mcp.tool()
+def raven_consolidate(threshold: float = 0.85, dry_run: bool = True) -> dict:
+    """
+    Sleep consolidation: merge near-duplicate episodic NEUTRAL memories into
+    consolidated semantic nodes (agglomerative cosine clustering), then
+    hot-reload the field — no restart needed.
+
+    The merged node gets a recall-frequency-weighted centroid embedding and
+    an extractive summary; the operation is atomic and continues the audit
+    hash chain. Defaults to dry_run=True so an agent previews the clusters
+    before committing a destructive-ish merge.
+
+    Args:
+        threshold: Cosine similarity threshold for clustering (0.5-0.99).
+        dry_run: If True (default), only preview what would be merged.
+
+    Returns:
+        processed / merged / created counts and per-group previews.
+    """
+    threshold = max(0.5, min(float(threshold), 0.99))
+    return _engine.consolidate(threshold=threshold, dry_run=bool(dry_run))
+
+
+@mcp.tool()
 def raven_info() -> dict:
     """
     Describe raven-memory's architecture, scoring formula, and field dynamics.

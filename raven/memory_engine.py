@@ -184,7 +184,7 @@ class AuditLog:
     timestamp: float
     operation: str
     query_text: Optional[str]
-    query_embedding: Optional[List[float]]
+    query_embedding: Optional[List[float]]   # legacy only — v3 stores qemb_sha256
     cells_activated: List[int]
     memories_retrieved: List[Dict]
     total_candidates: int
@@ -195,6 +195,7 @@ class AuditLog:
     returned_to_agent: int
     audit_hash: str
     prev_hash: str
+    qemb_sha256: Optional[str] = None
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -223,6 +224,7 @@ def compute_audit_hash(
     memories_retrieved,
     prev_hash: str,
     query_embedding=None,
+    qemb_hash: Optional[str] = None,
 ) -> str:
     """
     Canonical audit hash for the tamper-evident chain.
@@ -240,6 +242,15 @@ def compute_audit_hash(
       audit_hash == sha256(canonical_json(payload) + prev_hash)
       payload    == {ts, op, query, cells, results} exactly as persisted.
     """
+    # Plan 2.5 (schema v3): the embedding's hash is precomputed and persisted
+    # in its own column; the raw vector is no longer stored. Legacy rows
+    # (query_embedding populated, qemb_hash absent) still derive the hash
+    # from the stored vector — the derivation below is byte-identical to the
+    # original scheme, so old chains keep verifying.
+    if qemb_hash is None:
+        qemb_hash = hashlib.sha256(
+            str(query_embedding).encode("utf-8") if query_embedding is not None else b""
+        ).hexdigest()
     payload = json.dumps(
         {
             "ts": round(float(timestamp), 6),
@@ -247,9 +258,7 @@ def compute_audit_hash(
             "query": query_text,
             "cells": cells_activated,
             "results": memories_retrieved,
-            "qemb_sha256": hashlib.sha256(
-                str(query_embedding).encode("utf-8") if query_embedding is not None else b""
-            ).hexdigest(),
+            "qemb_sha256": qemb_hash,
         },
         sort_keys=True,
         ensure_ascii=False,
@@ -290,9 +299,12 @@ def verify_audit_chain(entries_desc: List[Dict]) -> Dict:
                 e["memories_retrieved"], str) else e["memories_retrieved"]
             qemb_stored = e.get("query_embedding")
             qemb = json.loads(qemb_stored) if qemb_stored else None
+            # v3 rows carry the hash in its own column (raw vector dropped);
+            # legacy rows re-derive it from the stored vector.
+            qemb_hash = e.get("qemb_sha256") if not qemb_stored else None
             recomputed = compute_audit_hash(
                 e["timestamp"], e["operation"], e["query_text"],
-                cells, results, e["prev_hash"], qemb,
+                cells, results, e["prev_hash"], qemb, qemb_hash=qemb_hash,
             )
             if recomputed != e["audit_hash"]:
                 integrity_ok = False
@@ -468,7 +480,7 @@ class AuthorStyleProfile:
 # Pre-versioning v1.0/v1.1 databases report user_version=0; every migration
 # block is idempotent (IF NOT EXISTS / tolerated ALTER), so they upgrade in
 # place without a separate tool.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class MemoryStore:
@@ -587,6 +599,16 @@ class MemoryStore:
                 conn.execute(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_mem_cell_id ON memories(cell_id)"
                 )
+
+            if version < 3:
+                # ---- v3 (plan 2.5): audit entries store the SHA-256 of the
+                # query embedding instead of the full 384-float JSON (~7 KB
+                # per recall). Legacy rows keep their query_embedding column
+                # populated and still verify via recomputation.
+                try:
+                    conn.execute("ALTER TABLE audit_log ADD COLUMN qemb_sha256 TEXT")
+                except sqlite3.OperationalError:
+                    pass
 
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             conn.commit()
@@ -911,8 +933,8 @@ class MemoryStore:
                 (timestamp, operation, query_text, query_embedding, cells_activated,
                  memories_retrieved, total_candidates, filtered_by_state,
                  filtered_by_estilometria, filtered_by_inhibitory, synaptic_activated,
-                 returned_to_agent, audit_hash, prev_hash)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 returned_to_agent, audit_hash, prev_hash, qemb_sha256)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     audit.timestamp, audit.operation, audit.query_text,
                     json.dumps(audit.query_embedding) if audit.query_embedding else None,
@@ -921,7 +943,7 @@ class MemoryStore:
                     audit.total_candidates, audit.filtered_by_state,
                     audit.filtered_by_estilometria, audit.filtered_by_inhibitory,
                     audit.synaptic_activated, audit.returned_to_agent,
-                    audit.audit_hash, audit.prev_hash,
+                    audit.audit_hash, audit.prev_hash, audit.qemb_sha256,
                 ),
             )
             conn.commit()
@@ -1792,19 +1814,27 @@ class AdaptiveMemoryEngine:
         ]
 
         # P0: .tolist() guard — query_embedding may arrive as ndarray or list.
+        # Plan 2.5: only its SHA-256 is persisted (schema v3); the derivation
+        # over str(list) is byte-identical to the legacy scheme so the same
+        # hash function covers both row generations.
         qe = None
         if query_embedding is not None:
             qe = (query_embedding.tolist()
                   if isinstance(query_embedding, np.ndarray)
                   else list(query_embedding))
+        qemb_hash = hashlib.sha256(
+            str(qe).encode("utf-8") if qe is not None else b""
+        ).hexdigest()
 
         audit_hash = compute_audit_hash(
-            ts, "recall", query_text, cells_sorted, mem_dicts, prev, qe,
+            ts, "recall", query_text, cells_sorted, mem_dicts, prev,
+            qemb_hash=qemb_hash,
         )
 
         return AuditLog(
             timestamp=ts, operation="recall", query_text=query_text,
-            query_embedding=qe,
+            query_embedding=None,
+            qemb_sha256=qemb_hash,
             cells_activated=cells_sorted,
             memories_retrieved=mem_dicts,
             total_candidates=total_cand,
@@ -1858,6 +1888,27 @@ class AdaptiveMemoryEngine:
             frontier = new_frontier
         return -1  # unreachable
 
+
+    @_synchronized
+    def consolidate(self, threshold: float = 0.85, dry_run: bool = False) -> Dict:
+        """
+        Run sleep consolidation in-process and hot-reload the field (plan 3.1).
+
+        Unlike the offline CLI, this needs no engine restart: the engine lock
+        excludes recalls while rows are merged, then the in-memory structures
+        (KDTree, topic index, link index, profiles) are rebuilt from the DB
+        and the spectral field is refreshed.
+        """
+        from .sleep_consolidator import run_consolidation
+        result = run_consolidation(
+            self._db.db_path, threshold=threshold, dry_run=dry_run,
+            rebuild_spectral=False,   # rebuilt through the engine below
+        )
+        if not dry_run and result.get("created", 0) > 0:
+            self._load_from_db()
+            self._kdtree_dirty = False   # _load_from_db already rebuilt it
+            self.rebuild_spectral_field()
+        return result
 
     @_synchronized
     def rebuild_spectral_field(self) -> bool:

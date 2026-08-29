@@ -38,9 +38,11 @@ La latencia de recall dejó de escalar linealmente con el corpus
   los n puntos). Sin cambios en este sprint — es exactamente el ítem **2.6**
   (backend ANN opcional). Mitigación actual: el rebuild es perezoso y ocurre
   una vez por arranque/mutación, no por consulta.
-- **Tamaño del audit log** (~11 KB por recall): el embedding completo de la
-  query sigue persistiéndose como JSON — ítem **2.5** (requiere migración de
-  esquema v3, ya posible con el versionado de 1.4).
+- ~~**Tamaño del audit log** (~11 KB por recall)~~ — **resuelto después en el
+  mismo sprint** (ítem **2.5**, esquema v3): el audit log persiste ahora el
+  SHA-256 del embedding en columna propia en vez del vector JSON completo.
+  Medido: **11 217 → 2 792 bytes por recall (4×)**. Las filas legacy siguen
+  verificando por recomputación; la cadena mixta legacy+v3 tiene test propio.
 
 ## Reproducir
 

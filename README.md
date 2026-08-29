@@ -383,6 +383,7 @@ python3 mcp_server.py    # stdio transport
 | `raven_reinforce` | Mark a memory as validated truth (×1.5 boost) |
 | `raven_forget` | Exclude a memory from recall (preserved, not deleted) |
 | `raven_create_link` | Create a RESONANT or INHIBITORY cell link |
+| `raven_consolidate` | Sleep consolidation with hot reload (dry-run by default) |
 | `raven_get_memory` | Fetch a single memory by ID |
 | `raven_stats` | Engine telemetry (MSS, cells, links, state distribution) |
 | `raven_audit_trail` | Tamper-evident hash-chain verification |
@@ -486,12 +487,17 @@ POST   /recall                      Semantic recall with field dynamics
 POST   /memories/{id}/reinforce     Set state = REINFORCED
 POST   /memories/{id}/forget        Set state = FORGOTTEN
 POST   /cell-links                  Create a RESONANT/INHIBITORY link
+POST   /consolidate                 Sleep consolidation, in-process (no restart)
 GET    /graph                       Export the memory graph (nodes + edges)
 GET    /stats                       Engine stats + MSS
+GET    /metrics                     Prometheus exposition (text format)
 GET    /audit                       Hash-chain audit trail
 GET    /alerts                      Forensic tamper alerts
 WS     /ws                          Real-time event stream
 ```
+
+`/recall` accepts a `session_id` — conversation history and STDP turn signals
+are isolated per session.
 
 Full interactive docs at **http://localhost:8000/docs**
 

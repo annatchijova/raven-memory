@@ -230,6 +230,17 @@ def _bump_field_generation():
     _field_generation += 1
 
 
+# P2 (plan 3.3): process-local counters for /metrics. The concrete use case:
+# noticing that the embedding provider fell back to dummy WITHOUT tailing logs.
+_metrics = {
+    "recalls_total": 0,
+    "recall_seconds_sum": 0.0,
+    "recall_cache_hits_total": 0,
+    "stores_total": 0,
+    "consolidations_total": 0,
+}
+
+
 def _cache_key(query: str, top_k: int, hops: int, layer_filter: Optional[str],
                session_id: str) -> str:
     normalized = query.strip().lower()
@@ -259,6 +270,12 @@ class CellLinkRequest(BaseModel):
 
 class StateUpdate(BaseModel):
     memory_id: str
+
+
+class ConsolidateRequest(BaseModel):
+    threshold: float = Field(0.85, ge=0.5, le=0.99,
+                             description="Cosine similarity threshold for clustering")
+    dry_run: bool = Field(False, description="Preview clusters without writing")
 
 
 # ============================================================
@@ -396,6 +413,7 @@ async def store_memory(req: StoreRequest):
         metadata=req.metadata,
     )
     _bump_field_generation()
+    _metrics["stores_total"] += 1
 
     result = {
         "memory_id": entry.memory_id,
@@ -500,6 +518,7 @@ async def recall(req: RecallRequest):
                 ts, cached = hit
                 if now - ts <= _RECALL_CACHE_TTL:
                     _recall_cache.move_to_end(key)
+                    _metrics["recall_cache_hits_total"] += 1
                     cached_copy = dict(cached)
                     cached_copy["_served_from_cache"] = True
                     return cached_copy
@@ -510,6 +529,7 @@ async def recall(req: RecallRequest):
     # inline froze the entire event loop (health checks, WebSocket, every
     # other request). Offload to the default threadpool; the engine and the
     # per-session state carry their own locks.
+    t0 = time.monotonic()
     result = await asyncio.to_thread(
         orch.process_message,
         user_text=req.query,
@@ -519,6 +539,8 @@ async def recall(req: RecallRequest):
         layer_filter=req.layer_filter,
         session_id=req.session_id,
     )
+    _metrics["recalls_total"] += 1
+    _metrics["recall_seconds_sum"] += time.monotonic() - t0
     result["_served_from_cache"] = False
 
     if req.store_interaction:
@@ -566,6 +588,30 @@ async def export_graph():
 
 
 # ============================================================
+# MAINTENANCE
+# ============================================================
+
+@app.post("/consolidate", tags=["maintenance"],
+          summary="Sleep consolidation, in-process — no restart needed",
+          dependencies=[Depends(require_token)])
+async def consolidate(req: ConsolidateRequest):
+    """
+    Plan 3.1: merge near-duplicate episodic memories and hot-reload the
+    field. The engine lock excludes recalls during the swap; afterwards the
+    KDTree, indices and spectral field reflect the consolidated state.
+    """
+    eng = _get_engine()
+    result = await asyncio.to_thread(eng.consolidate, req.threshold, req.dry_run)
+    if not req.dry_run and result.get("created", 0) > 0:
+        _bump_field_generation()
+        _metrics["consolidations_total"] += 1
+        await _broadcast("consolidation", {
+            "merged": result["merged"], "created": result["created"],
+        })
+    return result
+
+
+# ============================================================
 # STATS / AUDIT / ALERTS
 # ============================================================
 
@@ -595,6 +641,44 @@ async def get_audit(limit: int = 50):
         "count": len(entries),
         "entries": entries,
     }
+
+
+@app.get("/metrics", tags=["analytics"], summary="Prometheus exposition (text format)",
+         dependencies=[Depends(require_token)])
+async def metrics():
+    """Plan 3.3: no prometheus_client dependency — plain text exposition."""
+    from fastapi.responses import PlainTextResponse
+    eng = _get_engine()
+    orch = _get_orch()
+    stats = eng.get_stats()
+    prov = orch.embedder.provider_status()
+    lines = [
+        "# TYPE raven_recalls_total counter",
+        f"raven_recalls_total {_metrics['recalls_total']}",
+        "# TYPE raven_recall_seconds_sum counter",
+        f"raven_recall_seconds_sum {_metrics['recall_seconds_sum']:.6f}",
+        "# TYPE raven_recall_cache_hits_total counter",
+        f"raven_recall_cache_hits_total {_metrics['recall_cache_hits_total']}",
+        "# TYPE raven_stores_total counter",
+        f"raven_stores_total {_metrics['stores_total']}",
+        "# TYPE raven_consolidations_total counter",
+        f"raven_consolidations_total {_metrics['consolidations_total']}",
+        "# TYPE raven_embedding_degraded gauge",
+        f"raven_embedding_degraded {int(prov['degraded'])}",
+        "# TYPE raven_embedding_dummy_fallbacks_total counter",
+        f"raven_embedding_dummy_fallbacks_total {prov['dummy_fallbacks']}",
+        "# TYPE raven_memories_total gauge",
+        f"raven_memories_total {stats['total_memories']}",
+        "# TYPE raven_memory_stability_score gauge",
+        f"raven_memory_stability_score {stats['memory_stability_score']}",
+        "# TYPE raven_cell_links_total gauge",
+        f"raven_cell_links_total {sum(stats['cell_links'].values())}",
+        "# TYPE raven_recall_cache_size gauge",
+        f"raven_recall_cache_size {len(_recall_cache)}",
+        "# TYPE raven_ws_clients gauge",
+        f"raven_ws_clients {len(ws_clients)}",
+    ]
+    return PlainTextResponse("\n".join(lines) + "\n")
 
 
 @app.get("/alerts", tags=["analytics"], summary="Forensic tamper-detection alerts",

@@ -1,6 +1,6 @@
 # Plan de mejora — raven-memory
 
-**Fecha:** 2026-08-29 · **Base:** v1.1 (`db379f2`) · **Estado:** Fase 0 + CI (1.1) + 1.2 + 1.4 + 2.1–2.4 + 4.2 — 2026-08-29 (números: benchmarks/RESULTS.md)
+**Fecha:** 2026-08-29 · **Base:** v1.1 (`db379f2`) · **Estado:** Fase 0 + 1.1/1.2/1.4 + 2.1–2.5 + 3.1/3.3 + 4.2 — 2026-08-29 (números: benchmarks/RESULTS.md)
 
 Este documento es el resultado de una revisión completa del código (motor, API,
 cliente Qwen, consolidador, spectral, MCP, tests e infraestructura). Está
@@ -263,7 +263,7 @@ Son ~10-30 transacciones por recall.
 - **Aceptación:** export de un corpus de 50k con `max_nodes=1000` no carga
   50k filas (verificable con contador de filas leídas o tiempo).
 
-### 2.5 Adelgazar el audit log (P2)
+### 2.5 Adelgazar el audit log (P2) — ✅ HECHO
 
 Cada recall persiste el embedding completo de la query como JSON
 (`store_audit`, `memory_engine.py:774`) — ~4-8 KB por entrada que solo se usa
@@ -290,7 +290,7 @@ opcional) manteniendo el contrato de "solo celdas activas".
 
 ## Fase 3 — Producto y funcionalidad
 
-### 3.1 Consolidación sin reinicio (P1)
+### 3.1 Consolidación sin reinicio (P1) — ✅ HECHO
 
 Hoy el consolidador exige reiniciar el engine para refrescar el índice
 (`sleep_consolidator.py:379-382` lo admite). Es el mayor roce operativo.
@@ -313,7 +313,7 @@ mismo principio de honestidad que ya aplica el consolidador).
 - **Aceptación:** export → import en DB nueva → misma respuesta a las
   queries de la suite; `verify_audit_chain` reporta el estado real.
 
-### 3.3 Observabilidad (P2)
+### 3.3 Observabilidad (P2) — ✅ HECHO
 
 Con la API desplegada en ECS no hay métricas: añadir `/metrics` Prometheus
 (latencia de recall, tier de embeddings activo, `dummy_fallbacks`, tamaño de
@@ -323,7 +323,7 @@ uso concreto: enterarse de que el proveedor cayó a dummy **sin** mirar logs.
 - **Aceptación:** `curl /metrics` expone las series; una caída a dummy es
   visible como métrica.
 
-### 3.4 Mejoras MCP (P3)
+### 3.4 Mejoras MCP (P3) — 🔶 PARCIAL (env vars alineadas en 0.6; raven_consolidate añadida; falta raven_verify_chain y topic/claim en recall)
 
 - Alinear env vars (0.6) y añadir `raven_consolidate` (3.1) y
   `raven_verify_chain` como herramienta separada de `raven_audit_trail`.

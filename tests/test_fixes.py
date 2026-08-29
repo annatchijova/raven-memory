@@ -267,6 +267,99 @@ def test_newer_schema_refuses_to_open(tmp_path):
 
 
 # ============================================================
+# 3.1 — hot consolidation (no restart)
+# ============================================================
+
+def _near(base: np.ndarray, seed: int, noise: float = 0.01) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    e = base + rng.standard_normal(len(base)).astype(np.float32) * noise
+    e /= np.linalg.norm(e) + 1e-10
+    return e
+
+
+def test_hot_consolidation_without_restart(engine):
+    base = make_emb("duplicados")
+    for i in range(3):
+        engine.store(
+            "El gato duerme en el sofá cada tarde de verano sin excepción.",
+            _near(base, seed=i), layer="episodic",
+        )
+    engine.store("Algo completamente distinto sobre astronomía estelar.",
+                 make_emb("otra_cosa"), layer="episodic")
+
+    preview = engine.consolidate(threshold=0.8, dry_run=True)
+    assert preview["dry_run"] and preview["groups"], "dry-run must preview clusters"
+    assert engine.get_stats()["total_memories"] == 4, "dry-run must not write"
+
+    result = engine.consolidate(threshold=0.8, dry_run=False)
+    assert result["created"] >= 1 and result["merged"] >= 3
+
+    # The SAME engine instance must see the consolidated node — no restart.
+    results, _ = engine.recall(base, top_k=5)
+    ids = [r.memory.memory_id for r in results]
+    assert any(mid.startswith("cons_") for mid in ids), (
+        f"consolidated node must be recallable immediately, got {ids}"
+    )
+    assert engine.get_stats()["total_memories"] == 2   # 3 merged → 1, +1 untouched
+
+    from raven.memory_engine import verify_audit_chain
+    report = verify_audit_chain(engine.get_audit_trail())
+    assert report["chain_intact"], "consolidation must continue the audit chain"
+
+
+# ============================================================
+# 2.5 — audit log v3: hash column instead of raw embedding
+# ============================================================
+
+def test_audit_v3_stores_hash_not_embedding(engine):
+    engine.store("memoria auditada", make_emb("aud"))
+    engine.recall(make_emb("aud"), query_text="q", top_k=3)
+    rows = engine.get_audit_trail(limit=1)
+    assert rows[0]["query_embedding"] is None, "raw vector must no longer be persisted"
+    assert rows[0]["qemb_sha256"], "the embedding hash must be sealed in its own column"
+
+    from raven.memory_engine import verify_audit_chain
+    report = verify_audit_chain(engine.get_audit_trail())
+    assert report["chain_intact"] and report["hash_integrity"]
+
+
+def test_audit_chain_verifies_mixed_legacy_and_v3_rows(engine):
+    """A legacy row (raw embedding, pre-v3 scheme) inside a v3 chain must verify."""
+    import json as _json
+    import sqlite3
+    import time as _time
+    from raven.memory_engine import compute_audit_hash, verify_audit_chain
+
+    engine.store("memoria uno", make_emb("m1"))
+    engine.recall(make_emb("m1"), query_text="v3-a", top_k=3)
+
+    # Hand-craft a legacy-format row chained onto the current tail,
+    # hashed exactly as pre-v3 code did (raw embedding, derived hash).
+    prev = engine._db.get_prev_audit_hash()
+    ts = _time.time()
+    qe = [0.25, -0.5, 0.125]
+    legacy_hash = compute_audit_hash(ts, "recall", "legacy-q", [], [], prev, qe)
+    with sqlite3.connect(engine._db.db_path) as conn:
+        conn.execute(
+            """INSERT INTO audit_log
+            (timestamp, operation, query_text, query_embedding, cells_activated,
+             memories_retrieved, total_candidates, filtered_by_state,
+             filtered_by_estilometria, filtered_by_inhibitory, synaptic_activated,
+             returned_to_agent, audit_hash, prev_hash, qemb_sha256)
+            VALUES (?,?,?,?,?,?,0,0,0,0,0,0,?,?,NULL)""",
+            (ts, "recall", "legacy-q", _json.dumps(qe), "[]", "[]",
+             legacy_hash, prev),
+        )
+        conn.commit()
+
+    engine.recall(make_emb("m1"), query_text="v3-b", top_k=3)   # chains on top
+
+    report = verify_audit_chain(engine.get_audit_trail())
+    assert report["chain_intact"], f"linkage broken: {report['issues']}"
+    assert report["hash_integrity"], f"legacy row failed recompute: {report['issues']}"
+
+
+# ============================================================
 # API server — 0.2 event loop, 0.3 cache, 0.5 auth
 # ============================================================
 
@@ -380,6 +473,24 @@ def test_slow_recall_does_not_block_event_loop(tmp_path):
                     f"/health took {elapsed:.2f}s while /recall was in flight — "
                     "the blocking work is not offloaded from the event loop"
                 )
+
+    asyncio.run(scenario())
+
+
+def test_metrics_endpoint_exposes_counters(tmp_path):
+    api = _fresh_api(tmp_path)
+
+    async def scenario():
+        async with api.app.router.lifespan_context(api.app):
+            api.orchestrator.process_message = lambda **kw: _fake_result()
+            async with _lifespan_client(api) as client:
+                await client.post("/recall", json={"query": "metrica"})
+                await client.post("/recall", json={"query": "metrica"})   # cache hit
+                body = (await client.get("/metrics")).text
+                assert "raven_recalls_total 1" in body
+                assert "raven_recall_cache_hits_total 1" in body
+                assert "raven_embedding_degraded" in body
+                assert "raven_memory_stability_score" in body
 
     asyncio.run(scenario())
 
