@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -28,11 +29,21 @@ logger = logging.getLogger("raven.client")
 # CONFIG
 # ============================================================
 
+def resolve_dashscope_api_key() -> str:
+    """
+    Canonical API-key resolution for every entry point (API, MCP, demos).
+
+    DASHSCOPE_API_KEY is the documented variable; QWEN_API_KEY is accepted
+    as a legacy alias because the MCP server shipped reading it — before
+    this helper, an MCP user following the README's DASHSCOPE_API_KEY
+    instructions silently got dummy embeddings.
+    """
+    return os.environ.get("DASHSCOPE_API_KEY", "") or os.environ.get("QWEN_API_KEY", "")
+
+
 @dataclass
 class QwenConfig:
-    api_key: str = field(
-        default_factory=lambda: os.environ.get("DASHSCOPE_API_KEY", "")
-    )
+    api_key: str = field(default_factory=resolve_dashscope_api_key)
     base_url: str = field(
         default_factory=lambda: os.environ.get(
             "QWEN_BASE_URL",
@@ -321,6 +332,26 @@ Memory state legend:
 # ORCHESTRATOR
 # ============================================================
 
+class _SessionState:
+    """
+    Per-session conversation state.
+
+    P0: this used to live directly on the orchestrator, shared by every
+    caller of the API server — two concurrent users leaked conversation
+    history into each other's LLM prompts and cross-polluted STDP turn
+    signals. One state object per session_id, with its own lock so turns
+    within a session serialize while different sessions run concurrently.
+    """
+
+    __slots__ = ("turn_history", "conversation_history", "lock", "last_used")
+
+    def __init__(self):
+        self.turn_history: List[str] = []
+        self.conversation_history: List[Dict] = []
+        self.lock = threading.Lock()
+        self.last_used: float = time.time()
+
+
 class MemoryAgentOrchestrator:
     """
     Main entry point for agent interactions.
@@ -329,14 +360,27 @@ class MemoryAgentOrchestrator:
       embedding → recall → LLM → (optionally store) → return
     """
 
+    MAX_SESSIONS = 256   # LRU-evict beyond this; each state is tiny
+
     def __init__(self, engine: Any, config: QwenConfig):
         self.engine = engine
         self.config = config
         self.embedder = EmbeddingProvider(config)
         self.llm = QwenLLMClient(config)
-        # Rolling window of memory IDs activated in recent turns (for STDP)
-        self._turn_history: List[str] = []
-        self._conversation_history: List[Dict] = []
+        self._sessions: Dict[str, _SessionState] = {}
+        self._sessions_lock = threading.Lock()
+
+    def _session(self, session_id: str) -> _SessionState:
+        with self._sessions_lock:
+            state = self._sessions.get(session_id)
+            if state is None:
+                if len(self._sessions) >= self.MAX_SESSIONS:
+                    oldest = min(self._sessions, key=lambda k: self._sessions[k].last_used)
+                    del self._sessions[oldest]
+                state = _SessionState()
+                self._sessions[session_id] = state
+            state.last_used = time.time()
+            return state
 
     def process_message(
         self,
@@ -345,62 +389,68 @@ class MemoryAgentOrchestrator:
         top_k: int = 5,
         hops: int = 2,
         layer_filter: Optional[str] = None,
+        session_id: str = "default",
     ) -> Dict[str, Any]:
         """Full pipeline: embed → recall → LLM → optionally store → return structured result."""
         t0 = time.time()
+        session = self._session(session_id)
 
-        # 1. Embed query
-        query_emb = self.embedder.embed([user_text])[0]
+        # Serialize turns WITHIN a session (a conversation is sequential by
+        # nature); different sessions proceed concurrently. The engine has
+        # its own internal lock.
+        with session.lock:
+            # 1. Embed query
+            query_emb = self.embedder.embed([user_text])[0]
 
-        # 2. Recall from memory field
-        # P1: an engine failure (locked DB, corrupt row) must degrade to an
-        # answer without memory, not take the whole request down with a 500.
-        try:
-            recall_results, audit = self.engine.recall(
-                query_embedding=query_emb,
-                query_text=user_text,
-                top_k=top_k,
-                hops=hops,
-                layer_filter=layer_filter,
-                current_turn_memories=self._turn_history[-20:] if self._turn_history else None,
+            # 2. Recall from memory field
+            # P1: an engine failure (locked DB, corrupt row) must degrade to an
+            # answer without memory, not take the whole request down with a 500.
+            try:
+                recall_results, audit = self.engine.recall(
+                    query_embedding=query_emb,
+                    query_text=user_text,
+                    top_k=top_k,
+                    hops=hops,
+                    layer_filter=layer_filter,
+                    current_turn_memories=session.turn_history[-20:] if session.turn_history else None,
+                )
+                recall_error = None
+            except Exception as e:
+                logger.error(f"engine.recall() failed: {e}")
+                recall_results, audit = [], None
+                recall_error = str(e)
+
+            # 3. Update turn history for STDP
+            current_ids = [r.memory.memory_id for r in recall_results]
+            session.turn_history.extend(current_ids)
+            session.turn_history = session.turn_history[-40:]  # cap at 40
+
+            # 4. Build context block for LLM
+            context_block = self._build_context(recall_results)
+
+            # 5. LLM completion
+            llm_response = self.llm.complete(
+                user_text=user_text,
+                context_block=context_block,
+                conversation_history=session.conversation_history[-6:],  # last 3 turns
             )
-            recall_error = None
-        except Exception as e:
-            logger.error(f"engine.recall() failed: {e}")
-            recall_results, audit = [], None
-            recall_error = str(e)
 
-        # 3. Update turn history for STDP
-        current_ids = [r.memory.memory_id for r in recall_results]
-        self._turn_history.extend(current_ids)
-        self._turn_history = self._turn_history[-40:]  # cap at 40
+            # 6. Update conversation history
+            session.conversation_history.append({"role": "user", "content": user_text})
+            session.conversation_history.append({"role": "assistant", "content": llm_response})
+            # P2: unbounded growth — only a window is ever sent to the LLM,
+            # but the list itself leaked memory over long sessions.
+            session.conversation_history = session.conversation_history[-20:]
 
-        # 4. Build context block for LLM
-        context_block = self._build_context(recall_results)
-
-        # 5. LLM completion
-        llm_response = self.llm.complete(
-            user_text=user_text,
-            context_block=context_block,
-            conversation_history=self._conversation_history[-6:],  # last 3 turns
-        )
-
-        # 6. Update conversation history
-        self._conversation_history.append({"role": "user", "content": user_text})
-        self._conversation_history.append({"role": "assistant", "content": llm_response})
-        # P2: unbounded growth — only a window is ever sent to the LLM,
-        # but the list itself leaked memory over long sessions.
-        self._conversation_history = self._conversation_history[-20:]
-
-        # 7. Optionally store the interaction
-        if store_as_memory:
-            self.engine.store(
-                content=user_text,
-                embedding=query_emb,
-                layer="episodic",
-                session_id="agent",
-                metadata={"type": "user_query", "response_preview": llm_response[:80]},
-            )
+            # 7. Optionally store the interaction
+            if store_as_memory:
+                self.engine.store(
+                    content=user_text,
+                    embedding=query_emb,
+                    layer="episodic",
+                    session_id=session_id,
+                    metadata={"type": "user_query", "response_preview": llm_response[:80]},
+                )
 
         # 8. Format output
         recalled_formatted = [
@@ -428,6 +478,7 @@ class MemoryAgentOrchestrator:
             "audit_log": audit.to_dict() if audit is not None else None,
             "stats": self.engine.get_stats(),
             "turn_memory_ids": current_ids,
+            "session_id": session_id,
             # P0: surface degradation — the caller must be able to see that
             # results came from dummy embeddings or that recall failed.
             "embedding_provider": self.embedder.provider_status(),
@@ -451,10 +502,13 @@ class MemoryAgentOrchestrator:
             "stats": self.engine.get_stats(),
         }
 
-    def reset_conversation(self):
-        """Clear turn history and conversation context."""
-        self._turn_history.clear()
-        self._conversation_history.clear()
+    def reset_conversation(self, session_id: Optional[str] = None):
+        """Clear turn history and conversation context (one session, or all)."""
+        with self._sessions_lock:
+            if session_id is None:
+                self._sessions.clear()
+            else:
+                self._sessions.pop(session_id, None)
 
     # P1: context budget — unbounded blocks waste tokens and can push the
     # actual user query out of the model's effective window.

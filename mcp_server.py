@@ -52,7 +52,7 @@ from raven.memory_engine import (
     LinkType,
     verify_audit_chain,
 )
-from raven.qwen_client import EmbeddingProvider, QwenConfig
+from raven.qwen_client import EmbeddingProvider, QwenConfig, resolve_dashscope_api_key
 
 log = logging.getLogger("raven.mcp")
 logging.basicConfig(
@@ -67,13 +67,20 @@ mcp = FastMCP("raven-memory")
 _DB_PATH = Path(os.environ.get("RAVEN_DB_PATH", "raven_memory.db"))
 _engine = AdaptiveMemoryEngine(db_path=_DB_PATH)
 
-# Embedding provider — three-tier fallback (local > API > dummy)
+# Embedding provider — three-tier fallback (local > API > dummy).
+# P1: this used to read only QWEN_API_KEY while the rest of the project
+# (and all the docs) use DASHSCOPE_API_KEY — following the README gave the
+# MCP server dummy embeddings silently. resolve_dashscope_api_key() accepts
+# both, canonical name first.
 _qwen_config = QwenConfig(
-    api_key=os.environ.get("QWEN_API_KEY", ""),
+    api_key=resolve_dashscope_api_key(),
     use_local_embeddings=True,
     embedding_dim=_engine.embedding_dim,
 )
 _embedder = EmbeddingProvider(_qwen_config)
+log.info("Embedding tier at startup: %s (API key %s)",
+         _embedder.active_provider,
+         "configured" if _qwen_config.api_key else "not set")
 
 # -- Input limits (VIGIA/CORVUS pattern) ------------------------------------
 

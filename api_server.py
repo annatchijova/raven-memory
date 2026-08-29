@@ -17,11 +17,12 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -65,7 +66,7 @@ RATE_LIMIT_PER_MIN = int(os.environ.get("RAVEN_RATE_LIMIT", "30"))
 
 def require_token(request: Request):
     """
-    P0: auth dependency for mutating endpoints. Accepts
+    P0: auth dependency for mutating AND read endpoints. Accepts
     'Authorization: Bearer <token>' or 'X-API-Key: <token>'.
     No-op in open mode (token unset) so the local demo stays one-command.
     """
@@ -73,7 +74,8 @@ def require_token(request: Request):
         return
     auth = request.headers.get("authorization", "")
     provided = auth[7:] if auth.lower().startswith("bearer ") else request.headers.get("x-api-key", "")
-    if provided != API_TOKEN:
+    # Constant-time comparison — a plain != leaks the match length through timing.
+    if not secrets.compare_digest(provided.encode(), API_TOKEN.encode()):
         raise HTTPException(status_code=401, detail="Invalid or missing API token")
 
 
@@ -107,10 +109,14 @@ class SlidingWindowLimiter:
 rate_limiter = SlidingWindowLimiter(RATE_LIMIT_PER_MIN)
 
 
+# P1: only honour X-Forwarded-For when the operator declares a trusted
+# reverse proxy in front. Without a proxy, any direct client could rotate
+# the header per request and dodge the rate limit entirely.
+TRUST_PROXY = os.environ.get("RAVEN_TRUST_PROXY", "0") == "1"
+
+
 async def rate_limited(request: Request):
-    # Respect X-Forwarded-For when behind a reverse proxy (nginx, Cloudflare).
-    # Fall back to the TCP connection address only if the header is absent.
-    forwarded_for = request.headers.get("X-Forwarded-For")
+    forwarded_for = request.headers.get("X-Forwarded-For") if TRUST_PROXY else None
     if forwarded_for:
         client = forwarded_for.split(",")[0].strip()
     else:
@@ -151,7 +157,12 @@ async def lifespan(app: FastAPI):
         f"(embeddings: {'local' if RAVEN_USE_LOCAL_EMBEDDINGS else 'qwen_api'}, "
         f"dim={RAVEN_EMBEDDING_DIM})"
     )
-    engine = AdaptiveMemoryEngine(embedding_dim=RAVEN_EMBEDDING_DIM)
+    # RAVEN_DB_PATH lets deployments (and tests) place the SQLite file
+    # explicitly — same variable the MCP server already honours.
+    engine = AdaptiveMemoryEngine(
+        embedding_dim=RAVEN_EMBEDDING_DIM,
+        db_path=Path(os.environ.get("RAVEN_DB_PATH", "raven_memory.db")),
+    )
     orchestrator = MemoryAgentOrchestrator(engine, QwenConfig(
         use_local_embeddings=RAVEN_USE_LOCAL_EMBEDDINGS,
         embedding_dim=RAVEN_EMBEDDING_DIM,
@@ -199,12 +210,30 @@ class StoreRequest(BaseModel):
 
 
 import hashlib
-_recall_cache: Dict[str, Dict] = {}
-_recall_cache_lock = asyncio.Lock()
 
-def _cache_key(query: str, top_k: int, hops: int, layer_filter: Optional[str]) -> str:
+# P0: the old cache was never invalidated — after a store/reinforce/forget the
+# same query kept returning the pre-mutation result (stale stats, audit and
+# ranking), and the dict grew without bound. Now every field mutation bumps a
+# generation counter baked into the cache key, entries carry a TTL (covers
+# out-of-process mutations like the sleep consolidator), and the cache is a
+# bounded LRU. Degraded or failed results are never cached.
+_recall_cache: "OrderedDict[str, Tuple[float, Dict]]" = OrderedDict()
+_recall_cache_lock = asyncio.Lock()
+_RECALL_CACHE_MAX = int(os.environ.get("RAVEN_RECALL_CACHE_MAX", "512"))
+_RECALL_CACHE_TTL = float(os.environ.get("RAVEN_RECALL_CACHE_TTL", "300"))
+_field_generation = 0
+
+
+def _bump_field_generation():
+    """Invalidate all cached recalls — call on any mutation of the field."""
+    global _field_generation
+    _field_generation += 1
+
+
+def _cache_key(query: str, top_k: int, hops: int, layer_filter: Optional[str],
+               session_id: str) -> str:
     normalized = query.strip().lower()
-    raw = f"{normalized}|{top_k}|{hops}|{layer_filter or ''}"
+    raw = f"{normalized}|{top_k}|{hops}|{layer_filter or ''}|{session_id}|{_field_generation}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -215,6 +244,11 @@ class RecallRequest(BaseModel):
     layer_filter: Optional[str] = None
     store_interaction: bool = Field(False, description="Store query as episodic memory")
     no_cache: bool = Field(False, description="Bypass cache, force a live Qwen call")
+    session_id: str = Field(
+        "default",
+        max_length=128,
+        description="Conversation session — history and STDP signals are isolated per session",
+    )
 
 
 class CellLinkRequest(BaseModel):
@@ -304,18 +338,23 @@ async def api_root():
 async def health():
     eng = _get_engine()
     orch = _get_orch()
-    return {
+    # /health stays public (probes need it), but with auth enabled it must
+    # not volunteer the deployment's configuration or field telemetry to
+    # anonymous callers.
+    payload = {
         "status": "ok",
-        "stats": eng.get_stats(),
         # P0: degradation is observable, not silent. "degraded": true means
         # recall is running over dummy embeddings — semantically meaningless.
         "embedding_provider": orch.embedder.provider_status(),
-        "security": {
-            "auth_enabled": bool(API_TOKEN),
+        "security": {"auth_enabled": bool(API_TOKEN)},
+    }
+    if not API_TOKEN:
+        payload["stats"] = eng.get_stats()
+        payload["security"].update({
             "cors_origins": ALLOWED_ORIGINS,
             "rate_limit_per_min": RATE_LIMIT_PER_MIN,
-        },
-    }
+        })
+    return payload
 
 
 # ============================================================
@@ -333,7 +372,9 @@ async def store_memory(req: StoreRequest):
     except KeyError:
         raise HTTPException(400, f"Invalid state '{req.state}'. Use REINFORCED | NEUTRAL | FORGOTTEN")
 
-    emb = orch.embedder.embed([req.content])[0]
+    # P0: embedding can hit the Qwen API (retries + 30 s timeout) — offload
+    # so the event loop stays responsive.
+    emb = (await asyncio.to_thread(orch.embedder.embed, [req.content]))[0]
     # P1: validate the provider's output BEFORE it reaches the engine —
     # a misconfigured API model (e.g. 1024-dim) would otherwise surface
     # as an opaque engine ValueError deep in the call stack.
@@ -344,7 +385,8 @@ async def store_memory(req: StoreRequest):
             f"({eng.embedding_dim},). Check embedding model configuration.",
         )
 
-    entry = eng.store(
+    entry = await asyncio.to_thread(
+        eng.store,
         content=req.content,
         embedding=emb,
         layer=req.layer,
@@ -353,6 +395,7 @@ async def store_memory(req: StoreRequest):
         author_id=req.author_id,
         metadata=req.metadata,
     )
+    _bump_field_generation()
 
     result = {
         "memory_id": entry.memory_id,
@@ -367,7 +410,8 @@ async def store_memory(req: StoreRequest):
     return result
 
 
-@app.get("/memories", tags=["memories"], summary="List memories with optional filters")
+@app.get("/memories", tags=["memories"], summary="List memories with optional filters",
+         dependencies=[Depends(require_token)])
 async def list_memories(
     layer: Optional[str] = None,
     state: Optional[str] = None,
@@ -397,7 +441,8 @@ async def list_memories(
     }
 
 
-@app.get("/memories/{memory_id}", tags=["memories"], summary="Get a single memory by ID")
+@app.get("/memories/{memory_id}", tags=["memories"], summary="Get a single memory by ID",
+         dependencies=[Depends(require_token)])
 async def get_memory(memory_id: str):
     eng = _get_engine()
     m = eng._db.load_memory(memory_id)
@@ -413,9 +458,10 @@ async def get_memory(memory_id: str):
 async def reinforce_memory(memory_id: str):
     eng = _get_engine()
     try:
-        entry = eng.reinforce(memory_id)
+        entry = await asyncio.to_thread(eng.reinforce, memory_id)
     except KeyError as e:
         raise HTTPException(404, str(e))
+    _bump_field_generation()
     stats = eng.get_stats()
     result = {"memory_id": memory_id, "new_state": entry.state.name, "mss": stats["memory_stability_score"]}
     await _broadcast("memory_reinforced", result)
@@ -427,9 +473,10 @@ async def reinforce_memory(memory_id: str):
 async def forget_memory(memory_id: str):
     eng = _get_engine()
     try:
-        entry = eng.forget(memory_id)
+        entry = await asyncio.to_thread(eng.forget, memory_id)
     except KeyError as e:
         raise HTTPException(404, str(e))
+    _bump_field_generation()
     stats = eng.get_stats()
     result = {"memory_id": memory_id, "new_state": entry.state.name, "mss": stats["memory_stability_score"]}
     await _broadcast("memory_forgotten", result)
@@ -443,28 +490,52 @@ async def forget_memory(memory_id: str):
 @app.post("/recall", tags=["recall"], summary="Recall memories matching a query",
           dependencies=[Depends(require_token), Depends(rate_limited)])
 async def recall(req: RecallRequest):
-    key = _cache_key(req.query, req.top_k, req.hops, req.layer_filter)
+    key = _cache_key(req.query, req.top_k, req.hops, req.layer_filter, req.session_id)
+    now = time.monotonic()
 
     if not req.no_cache:
         async with _recall_cache_lock:
-            cached = _recall_cache.get(key)
-        if cached is not None:
-            cached_copy = dict(cached)
-            cached_copy["_served_from_cache"] = True
-            return cached_copy
+            hit = _recall_cache.get(key)
+            if hit is not None:
+                ts, cached = hit
+                if now - ts <= _RECALL_CACHE_TTL:
+                    _recall_cache.move_to_end(key)
+                    cached_copy = dict(cached)
+                    cached_copy["_served_from_cache"] = True
+                    return cached_copy
+                del _recall_cache[key]
 
     orch = _get_orch()
-    result = orch.process_message(
+    # P0: process_message blocks for up to ~30 s on the Qwen API — running it
+    # inline froze the entire event loop (health checks, WebSocket, every
+    # other request). Offload to the default threadpool; the engine and the
+    # per-session state carry their own locks.
+    result = await asyncio.to_thread(
+        orch.process_message,
         user_text=req.query,
         store_as_memory=req.store_interaction,
         top_k=req.top_k,
         hops=req.hops,
         layer_filter=req.layer_filter,
+        session_id=req.session_id,
     )
     result["_served_from_cache"] = False
 
-    async with _recall_cache_lock:
-        _recall_cache[key] = dict(result)
+    if req.store_interaction:
+        _bump_field_generation()
+
+    # Never cache noise: a degraded (dummy-embedding) or failed recall would
+    # otherwise keep serving meaningless results after the provider recovers.
+    cacheable = (
+        not result.get("recall_error")
+        and not result.get("embedding_provider", {}).get("degraded", False)
+    )
+    if cacheable:
+        async with _recall_cache_lock:
+            _recall_cache[key] = (now, dict(result))
+            _recall_cache.move_to_end(key)
+            while len(_recall_cache) > _RECALL_CACHE_MAX:
+                _recall_cache.popitem(last=False)
 
     await _broadcast("recall_executed", {"query": req.query, "hits": len(result["recalled_memories"])})
     return result
@@ -483,6 +554,7 @@ async def create_cell_link(req: CellLinkRequest):
     except KeyError:
         raise HTTPException(400, f"Invalid link_type '{req.link_type}'. Use RESONANT | NEUTRAL | INHIBITORY")
     eng.create_cell_link(req.from_cell_id, req.to_cell_id, lt)
+    _bump_field_generation()
     return {"from": req.from_cell_id, "to": req.to_cell_id, "type": lt.name}
 
 
@@ -497,12 +569,13 @@ async def export_graph():
 # STATS / AUDIT / ALERTS
 # ============================================================
 
-@app.get("/stats", tags=["analytics"])
+@app.get("/stats", tags=["analytics"], dependencies=[Depends(require_token)])
 async def get_stats():
     return _get_engine().get_stats()
 
 
-@app.get("/audit", tags=["analytics"], summary="Audit trail (hash-chain, fully verified)")
+@app.get("/audit", tags=["analytics"], summary="Audit trail (hash-chain, fully verified)",
+         dependencies=[Depends(require_token)])
 async def get_audit(limit: int = 50):
     eng = _get_engine()
     # Bug #21: clamp the limit. ?limit=1000000 would load a million audit rows
@@ -524,7 +597,8 @@ async def get_audit(limit: int = 50):
     }
 
 
-@app.get("/alerts", tags=["analytics"], summary="Forensic tamper-detection alerts")
+@app.get("/alerts", tags=["analytics"], summary="Forensic tamper-detection alerts",
+         dependencies=[Depends(require_token)])
 async def get_alerts(limit: int = 30):
     eng = _get_engine()
     alerts = eng.get_alerts(limit=limit)
@@ -556,7 +630,7 @@ async def websocket_endpoint(ws: WebSocket):
     # Open mode (no token configured) keeps the local demo frictionless.
     if API_TOKEN:
         provided = ws.query_params.get("token", "")
-        if provided != API_TOKEN:
+        if not secrets.compare_digest(provided.encode(), API_TOKEN.encode()):
             # Bug #20: 1008 (Policy Violation) is the registered close code for
             # an auth/policy failure; 4xxx codes are non-standard.
             await ws.close(code=1008, reason="Invalid or missing token")
