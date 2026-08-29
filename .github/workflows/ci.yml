@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      # Light install: the suites run on deterministic dummy embeddings, so
+      # torch + sentence-transformers (multi-GB) stay out of CI on purpose.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy scipy scikit-learn fastapi "uvicorn[standard]" \
+                      pydantic requests pytest httpx
+
+      - name: Unit & regression tests (pytest)
+        run: pytest tests/test_suite.py tests/test_fixes.py -q
+
+      - name: Adversarial stress test
+        run: python tests/demo_stress_test.py
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t raven-memory:ci .

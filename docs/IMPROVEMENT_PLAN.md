@@ -1,6 +1,6 @@
 # Plan de mejora — raven-memory
 
-**Fecha:** 2026-08-29 · **Base:** v1.1 (`db379f2`) · **Estado:** propuesta
+**Fecha:** 2026-08-29 · **Base:** v1.1 (`db379f2`) · **Estado:** Fase 0 completa + CI (1.1) — 2026-08-29
 
 Este documento es el resultado de una revisión completa del código (motor, API,
 cliente Qwen, consolidador, spectral, MCP, tests e infraestructura). Está
@@ -33,7 +33,7 @@ mejoras de mayor impacto ahora son:
 
 ## Fase 0 — Bugs y correcciones críticas
 
-### 0.1 El módulo spectral nunca se importa (P0)
+### 0.1 El módulo spectral nunca se importa (P0) — ✅ HECHO
 
 `raven/memory_engine.py:44` hace `from spectral import SpectralField,
 SpectralStore`, pero `spectral.py` vive dentro del paquete `raven/` y ningún
@@ -56,7 +56,7 @@ de la filosofía de "degradación honesta" del proyecto.
   afirme `_SPECTRAL_AVAILABLE is True`; `/recall` devuelve `resonance_score`
   distinto de 0.0 con un campo construido.
 
-### 0.2 La API bloquea el event loop en cada recall (P0)
+### 0.2 La API bloquea el event loop en cada recall (P0) — ✅ HECHO
 
 `api_server.py:445` (`/recall`) y `:327` (`POST /memories`) son `async def`
 pero llaman código síncrono: `orch.process_message()` encadena embedding local
@@ -72,7 +72,7 @@ todo el servidor.
 - **Aceptación:** test de concurrencia: un `/recall` lento (mock de Qwen con
   sleep) no impide que `/health` responda en <100 ms.
 
-### 0.3 La caché de `/recall` sirve resultados obsoletos y crece sin límite (P0)
+### 0.3 La caché de `/recall` sirve resultados obsoletos y crece sin límite (P0) — ✅ HECHO
 
 `api_server.py:202` — `_recall_cache` no se invalida nunca: tras almacenar,
 reforzar u olvidar una memoria, la misma query devuelve el resultado viejo
@@ -87,7 +87,7 @@ cachea también respuestas degradadas (dummy embeddings).
 - **Aceptación:** test API: store A → recall Q → store B (relevante a Q) →
   recall Q devuelve B; la caché no supera N entradas.
 
-### 0.4 Todos los clientes HTTP comparten una sola conversación (P0)
+### 0.4 Todos los clientes HTTP comparten una sola conversación (P0) — ✅ HECHO
 
 `MemoryAgentOrchestrator` mantiene `_turn_history` y `_conversation_history`
 globales al proceso (`raven/qwen_client.py:338-339`), y la API instancia un
@@ -103,7 +103,7 @@ siempre usa `session_id="agent"`.
 - **Aceptación:** test: dos sesiones intercaladas no comparten historial de
   conversación ni de turnos.
 
-### 0.5 Endpoints de lectura sin autenticación (P1, seguridad)
+### 0.5 Endpoints de lectura sin autenticación (P1, seguridad) — ✅ HECHO
 
 Con `RAVEN_API_TOKEN` configurado, los endpoints mutadores exigen token, pero
 `GET /memories`, `GET /memories/{id}`, `GET /audit`, `GET /alerts` y
@@ -122,7 +122,7 @@ contenido y las queries de los usuarios). Solo `GET /graph` está protegido.
 - **Aceptación:** con token configurado, toda lectura sin token → 401; test
   de spoofing de `X-Forwarded-For` sin proxy declarado no rota el bucket.
 
-### 0.6 Inconsistencia de variable de entorno en el MCP server (P1)
+### 0.6 Inconsistencia de variable de entorno en el MCP server (P1) — ✅ HECHO
 
 `mcp_server.py:72` lee `QWEN_API_KEY`, pero el cliente, el README y la API
 usan `DASHSCOPE_API_KEY`. Quien configure `DASHSCOPE_API_KEY` para el MCP
@@ -133,7 +133,7 @@ dummy.
   alias retrocompatible; loguear qué tier quedó activo al arrancar.
 - **Aceptación:** test unitario de resolución de config.
 
-### 0.7 Perfil estilométrico basado en una sola muestra (P1)
+### 0.7 Perfil estilométrico basado en una sola muestra (P1) — ✅ HECHO
 
 `_author_fingerprints` guarda la **primera** huella vista por autor y no se
 actualiza jamás (`memory_engine.py:962-964`, `:1062-1063`). Consecuencias: el
@@ -154,7 +154,7 @@ positivos que **destruyen datos de recall** (auto-FORGOTTEN en plena lectura,
 
 ## Fase 1 — Infraestructura de ingeniería
 
-### 1.1 CI en GitHub Actions (P0 de proceso)
+### 1.1 CI en GitHub Actions (P0 de proceso) — ✅ HECHO
 
 No hay `.github/workflows/`. Nada impide que un push rompa los 20 tests.
 
