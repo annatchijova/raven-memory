@@ -511,6 +511,24 @@ python run_all.py --api        # → http://localhost:8010/docs
 
 ---
 
+## Measured, not claimed
+
+The field's advantage over plain top-k is benchmarked, not asserted
+([full tables + methodology](benchmarks/QUALITY.md),
+[perf numbers](benchmarks/RESULTS.md)):
+
+| Metric (synthetic corpus, known ground truth) | plain top-k | raven field |
+|---|---:|---:|
+| recall@5 on cluster queries | 0.57–0.59 | **0.69** |
+| user-validated claim outranks its contradiction | 7–12 / 20 | **20 / 20** |
+| validated truth silenced by an unverified claim | n/a | **0 / 20** |
+
+Recall p50 at 5,000 memories: **24 ms** (was 128 ms before the Fase-2
+optimizations); audit entries: **2.8 KB** each (was 11.2 KB).
+Reproduce with `python benchmarks/quality.py` and `python benchmarks/perf.py`.
+
+---
+
 ## Memory Stability Score (MSS)
 
 ```

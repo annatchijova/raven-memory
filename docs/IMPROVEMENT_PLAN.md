@@ -1,6 +1,6 @@
 # Plan de mejora — raven-memory
 
-**Fecha:** 2026-08-29 · **Base:** v1.1 (`db379f2`) · **Estado:** Fase 0 + 1.1/1.2/1.4 + 2.1–2.5 + 3.1/3.3 + 4.2 — 2026-08-29 (números: benchmarks/RESULTS.md)
+**Fecha:** 2026-08-29 · **Base:** v1.1 (`db379f2`) · **Estado:** Fase 0 + 1.1/1.2/1.4 + 2.1–2.5 + 3.1/3.3 + 4.1(sintético)/4.2 — 2026-08-29 (números: benchmarks/RESULTS.md y QUALITY.md)
 
 Este documento es el resultado de una revisión completa del código (motor, API,
 cliente Qwen, consolidador, spectral, MCP, tests e infraestructura). Está
@@ -347,7 +347,7 @@ uso concreto: enterarse de que el proveedor cayó a dummy **sin** mirar logs.
 Es la inversión de mayor retorno en credibilidad: el README afirma que el
 campo es mejor que `top-k` plano, pero no hay ningún número que lo respalde.
 
-### 4.1 Benchmark de calidad de recall (P1)
+### 4.1 Benchmark de calidad de recall (P1) — 🔶 HECHO (corpus sintético; falta la parte de dataset público con embeddings reales)
 
 - Harness `benchmarks/` con dos condiciones sobre el mismo corpus y
   embeddings: (a) baseline coseno top-k puro, (b) campo completo (estados +
