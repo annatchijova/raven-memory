@@ -592,3 +592,99 @@ de un `structural_digest()` cada vez más mágico.
 
 **No implementado a propósito.** Establecer qué puede afirmar el instrumento va
 antes de cambiar lo que hace.
+
+---
+
+## 15. `StateWitness` (`tests/state_witness.py`)
+
+Instrumento sucesor de `structural_digest()`, que **no se arregla** — §14 queda
+como su autopsia. No reemplaza todavía ningún gate.
+
+### Frontera semántica, no mecánica
+
+Un walker irrestricto de "todo objeto Python alcanzable" no captura estado del
+engine, captura reachability del intérprete: instancia → Enum → clase →
+funciones → globals → módulos. La versión ingenua reventaba con `RecursionError`
+en `LinkType.__objclass__`.
+
+```
+DESCEND               dict / list / tuple / set / frozenset / deque,
+                      dataclasses, instancias con __dict__
+TERMINAL_BY_VALUE     None/bool/int/float/str/bytes, miembros de Enum, ndarray
+TERMINAL_BY_IDENTITY  funciones, clases, módulos
+EXCLUDED              sólo por path + justificación escrita
+UNKNOWN + mutable     → UnrepresentableState(path, type)   ← falla, no resume
+```
+
+Los miembros de `Enum` como terminal por valor son lo que corta la recursión de
+`__objclass__` sin necesidad de auditar el intérprete.
+
+**Criterio de aceptación, fijado antes de escribir código:** si el witness
+encuentra un objeto mutable propiedad del engine y no sabe representarlo, la
+prueba falla nombrando path y tipo. En la primera corrida contra un engine real
+falló en `engine._db.db_path (PosixPath)` — exactamente el comportamiento
+buscado.
+
+### Valor e identidad son dos claims, no uno
+
+```
+value_signature    path → (tipo, valor canónico)      qué ES el estado
+alias_signature    (path_canónico(padre), label,      qué referencias apuntan
+                    path_canónico(hijo))              al MISMO objeto
+```
+
+`value_signature` se indexa por **path**, no por nodo: dos paths que comparten
+un objeto y dos paths con copias de igual valor producen la misma firma, que es
+justamente lo que hace que el claim de valor sea independiente del cableado.
+`alias_signature` nombra los nodos por su path canónico (más corto, desempate
+lexicográfico) porque `id()` no es comparable entre dos witness.
+
+Sobre el caso que el digest viejo declaraba idéntico:
+
+```
+value_state_equal    = True     ← las copias tienen igual valor
+alias_topology_equal = False    ← dejaron de compartir objeto
+```
+
+Canonicalización de valor y construcción del grafo **no comparten reglas**: un
+`set` es independiente del orden como valor, un `list`/`deque` no, y la
+asociación `key → hijo` de un dict sobrevive en las etiquetas de arista, no en
+el valor.
+
+### Ciclos: terminan sin perder la arista de vuelta
+
+Detectar un ciclo no puede significar descartarlo — la back-edge **es** estado.
+El witness registra la arista y no re-camina el nodo. Testeado con un ciclo
+`a → b → a` y con un dict autorreferente.
+
+### Las tres inversiones, y la que no
+
+| | `structural_digest()` | `StateWitness` |
+|---|---|---|
+| objeto opaco mutado por el core | ciego | **detecta** (valor) |
+| `_author_profiles[k]._samples[0]` | ciego | **detecta** (valor) |
+| aliasing roto, valor igual | ciego | **detecta** (topología) |
+| `S0 → S1 → S0` | ciego | **sigue ciego, correctamente** |
+
+La transitoria no es alcanzable por ninguna comparación before/after. Necesita
+un `MutationJournal` que instrumente superficies de escritura, y su claim
+tendría que estar acotado a *"ninguna mutación por las superficies
+instrumentadas"* — nunca *"ninguna mutación"*. El witness no reclama cubrirla.
+
+### Pendiente: witnesses semánticos
+
+`_db` y `kdtree` quedan excluidos **con justificación**, no por dificultad:
+necesitan witnesses semánticos, no recursión estructural dentro de las
+internals de sqlite o scipy.
+
+```
+DBWitness        audit_head (_prev_audit_hash), fingerprints de tablas relevantes
+KDTreeWitness    indexed_cell_ids, fingerprint de vectores fuente, dirty state
+```
+
+`_prev_audit_hash` importa particularmente: si una sonda pudiera mover la cabeza
+de la cadena de auditoría y el gate no lo viera, sería exactamente el falso
+"read-only" que todo esto existe para eliminar.
+
+Se implementan **después** de que el structural witness esté estable, y recién
+entonces se decide qué gate reemplaza a cuál.
