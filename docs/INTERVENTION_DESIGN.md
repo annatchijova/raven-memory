@@ -878,3 +878,99 @@ UNSUPPORTED_MUTABLE` directamente.
 `S0 → S1 → S0`, sin cambios y sin reclamo. Y `_db` / `kdtree` siguen excluidos,
 así que esto continúa siendo un *structural witness sobre el subconjunto
 soportado*, no un witness del estado del engine. Ningún gate reemplazado.
+
+---
+
+## 18. Adversario de `DBWitness`, escrito antes del witness
+
+Diseñar el canonicalizador primero es como uno se enamora del hash. Así que
+primero el adversario: pares de bases que un *snapshot semántico* plausible
+declara **iguales** y que RAVEN distingue **conductualmente**.
+`tests/test_db_adversary.py`.
+
+Propiedad de promoción a la que sirven:
+
+```
+DBWitness(A) == DBWitness(B)
+  + mismo estado semántico no-DB
+  + mismos inputs de operación
+⇒ mismo comportamiento observable dependiente de la DB
+```
+
+No se demuestra con tests. Intentar falsificarla es lo que saca a la luz el
+estado causal faltante, y ya lo hizo tres veces. La dirección peligrosa es
+asimétrica: `DBWitness !=` con conducta idéntica es sobreaproximación
+conservadora; `DBWitness ==` con conducta distinta es lo que convierte un gate de
+pureza en una mentira.
+
+### Adversario 1 — `cell_id` **no** es un id interno irrelevante
+
+El campo que más tienta normalizar es causal. `load_memories()` ordena por
+`cell_id`, y `_load_from_db` alimenta cada fingerprint a un perfil de autor con
+ventana rodante de 10 **en ese orden**. Con más memorias que ventana, permutar
+`cell_id` cambia *cuáles* muestras sobreviven.
+
+| | A | B (cell_id permutado) |
+|---|---:|---:|
+| snapshot ingenuo | igual | igual |
+| `avg_sentence_length` del perfil | 12.000000 | 12.600000 |
+| distancia forense del mismo texto sonda | 0.760000 | 0.681740 |
+
+El umbral `ESTILOMETRIA_THRESHOLD = 0.5` es constante, así que una sonda cuya
+distancia caiga entre 0.682 y 0.760 recibe **veredictos opuestos**. Eso es
+consecuencia aritmética del umbral, no un flip medido: en esta corrida ambas
+disparan. Queda anotado como la inferencia que es.
+
+El recall en sí fue idéntico (mismo orden, mismos scores), así que la divergencia
+vive en la ruta forense, no en el ranking. No es menos causal: bajo
+`RAVEN_STYLO_ENFORCE=1` una alerta degrada la memoria a `FORGOTTEN`.
+
+### Adversario 2 — la cabeza de la cadena de auditoría es estado de la DB
+
+Dos bases que difieren sólo en su última entrada de `audit_log`: snapshot ingenuo
+igual, y **el siguiente recall sella un hash distinto** (`prev_hash` y
+`audit_hash` ambos difieren). Una sonda capaz de mover la cabeza sin ser
+observada es la forma precisa del falso "read-only".
+
+### Adversario 3 — `FORGOTTEN` no es borrado
+
+La postura del propio repo es que olvidar es exclusión, no destrucción. Un
+snapshot restringido a lo recuperable borra exactamente esa distinción:
+
+```
+snapshot "sólo activos"   iguales
+list_memories             14  vs  13
+reinforce(victim)         REINFORCED  vs  KeyError
+```
+
+### Set vs multiset, establecido por constraint
+
+`cell_links` tiene `PRIMARY KEY (from_cell_id, to_cell_id)`, así que **el par de
+extremos es la identidad** y `link_type` es uno de sus valores: dos links entre
+el mismo par con polaridad distinta no pueden coexistir (verificado: el segundo
+`INSERT OR REPLACE` reemplaza al primero). Eso es lo que licencia semántica de
+conjunto acá — no la comodidad de ordenar y hashear filas. Un snapshot con clave
+`(from, to, type)` modelaría una relación que el esquema no puede representar.
+
+### WAL: el archivo no es todo el estado
+
+Descubierto construyendo los adversarios: `shutil.copy` de la base produjo un
+esquema vacío, porque los datos vivían en el `-wal`. Un `DBWitness` que lea el
+archivo sin checkpointear puede observar una base distinta de la que ve el
+engine. Queda como test.
+
+### Inventario causal — el método, no la lista
+
+La pregunta por campo es una sola: *si modifico sólo esto y mantengo todo lo
+demás constante, ¿puede cambiar algún comportamiento futuro permitido del
+engine?* Si sí, entra al estado semántico o hay que justificar qué otro witness
+lo cubre.
+
+Confirmados causales hasta ahora: existencia de la memoria, `content_hash`,
+`state`, `cell_id` (vía orden de carga → perfiles y asignación futura),
+`last_activation` (recencia), `synaptic_links` (umbral de pull en 0.5),
+`fingerprint` + `author_id` (perfiles), extremos y polaridad de links, cabeza de
+la cadena de auditoría. `recall_count` alimenta el centroide ponderado de la
+consolidación y queda pendiente de medición.
+
+**Nada de `DBWitness` implementado.** El inventario y el adversario van primero.

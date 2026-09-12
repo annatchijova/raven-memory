@@ -129,15 +129,26 @@ def test_mutable_masquerading_as_a_value_object_fails_closed(engine):
 # INVERSION 1 — interned atoms no longer manufacture topology
 # ============================================================
 
-def test_INVERTED_adding_an_alias_no_longer_churns_unrelated_edges(engine):
+@pytest.mark.parametrize("payload_shape", ["bare_list", "wrapped_dict"])
+def test_INVERTED_adding_an_alias_no_longer_churns_unrelated_edges(engine, payload_shape):
     """Was KNOWN_DEFECT: 19 unrelated edges renamed. Value terminals are no
-    longer identity nodes, so interned atoms cannot fabricate sharing."""
+    longer identity nodes, so interned atoms cannot fabricate sharing.
+
+    The payload shape is parametrised because it decides whether this test can
+    fail at all. Canonical paths are shortest-first and the rebuild made edge
+    labels verbose, so an interned atom reached through a dict wrapper sits at a
+    LONGER path than the same atom inside `_kdtree_idx_to_cell`: it never wins
+    the canonical name and the defect is masked. Measured with the fix reverted,
+    the wrapped dict churns 0 edges and the bare list churns 15. Only the bare
+    list exercises the mechanism; the wrapper is kept as the contrast case.
+    """
     # The property, stated without a fragile path filter: attaching an alias
     # must not perturb the topology of state that was already there. The
     # pristine engine's edges are the reference.
     pristine = witness(engine).alias_signature()
 
-    shared = {"payload": [1, 2, 3]}          # small ints — still interned
+    shared = ([1, 2, 3] if payload_shape == "bare_list"
+              else {"payload": [1, 2, 3]})    # small ints — still interned
     engine.zzz_long_attribute_name = shared
     before = witness(engine)
     engine.a = shared                         # one new alias to the same object
@@ -150,19 +161,66 @@ def test_INVERTED_adding_an_alias_no_longer_churns_unrelated_edges(engine):
         f"{sorted(pristine - aa, key=repr)[:3]}"
     )
 
-    # RESIDUAL, stated rather than asserted away: canonical-path naming renames
-    # the aliased object's own subtree, because it genuinely acquired a shorter
-    # shortest path. So the reported delta is not minimal — every changed edge
-    # must at least NAME the aliased object. That is the sense in which this
-    # claim compares a rooted RENDERING of the topology and not the topology.
+    # RESIDUAL, characterised by CLOSURE rather than by a per-edge name test.
+    # A local assertion ("every changed edge names the aliased object") does not
+    # match the mechanism: renaming a shared node propagates to its descendants,
+    # and a descendant's edge need not mention the ancestor. The honest claim is
+    # that representation changes stay inside the subgraph REACHABLE from the
+    # nodes whose canonical path changed.
+    renamed = {
+        wid for wid in set(before.canonical_paths) & set(after.canonical_paths)
+        if before.canonical_paths[wid] != after.canonical_paths[wid]
+    }
+    assert renamed, "aliasing must rename at least the aliased node"
+
+    children = {}
+    for parent, _lab, child in after.edges:
+        children.setdefault(parent, []).append(child)
+    closure, stack = set(renamed), list(renamed)
+    while stack:
+        wid = stack.pop()
+        for c in children.get(wid, []):
+            if c not in closure:
+                closure.add(c)
+                stack.append(c)
+
+    allowed = {after.canonical_paths[w] for w in closure} | \
+              {before.canonical_paths[w] for w in closure if w in before.canonical_paths} | \
+              {"engine"}
     churn = ba ^ aa
     assert churn, "aliasing a mutable must be visible somewhere"
     for parent, _label, child in churn:
-        assert parent in ("engine", "engine.a", "engine.zzz_long_attribute_name") \
-            or parent.startswith(("engine.a|", "engine.zzz_long_attribute_name|")), \
-            f"churn reached unrelated state: {parent}"
-        assert child.startswith(("engine.a", "engine.zzz_long_attribute_name")), \
-            f"churn reached unrelated state: {child}"
+        assert parent in allowed and child in allowed, (
+            f"representation churn escaped the reachable closure: {parent} -> {child}"
+        )
+
+
+def test_a_disjoint_mutable_subgraph_is_bit_identical_under_renaming(engine):
+    """Sibling attack to the residual: shorten the path to X while a completely
+    disjoint mutable subgraph Q -> R exists. Q -> R's projection must be
+    bit-identical. This detects extrinsic churn without demanding a minimal
+    delta, which is the part the closure claim deliberately concedes."""
+    r = {"leaf": "value"}
+    q = {"r": r}
+    engine.q_disjoint = q                      # untouched by the aliasing below
+
+    x = {"payload": [1, 2, 3]}
+    engine.zzz_long_attribute_name = x
+    before = witness(engine)
+    engine.a = x                               # shortens the canonical path of x
+    after = witness(engine)
+
+    def projection(snap):
+        keep = {snap.canonical_paths[i] for i in (id(q), id(r))}
+        return {t for t in snap.alias_signature() if t[0] in keep or t[2] in keep}
+
+    assert projection(before) == projection(after), (
+        "a disjoint subgraph's representation moved: "
+        f"{sorted(projection(before) ^ projection(after), key=repr)[:3]}"
+    )
+    bv, av = before.value_signature(), after.value_signature()
+    for path in [p for p in bv if p.startswith("engine.q_disjoint")]:
+        assert bv[path] == av.get(path), f"disjoint value moved at {path}"
 
 
 @pytest.mark.parametrize("label,value", [
