@@ -508,3 +508,87 @@ Tras una batería de sondas —vacía, simples, pares, con `current_turn_memorie
 ningún atributo del engine difiere. El core **aliasea** estructuras del engine
 en vez de copiarlas (`all_cell_links = self._cell_links_index`), así que "no
 ejecutó SQL" no habría alcanzado como evidencia.
+
+---
+
+## 14. Qué observa realmente `structural_digest()` (`tests/test_digest_coverage.py`)
+
+El gate de pureza demuestra hoy algo más estrecho de lo que su nombre sugiere:
+
+> no cambió nada **que `structural_digest()` sepa representar**
+
+y no
+
+> no cambió el estado estructural del engine.
+
+Los dos producen exactamente el mismo verde. `_canon_value()` falla **abierto**:
+lo que no reconoce se vuelve `("opaque", type_name)` —una etiqueta de tipo sin
+contenido— y todo lo alcanzable únicamente a través de ese nodo desaparece de la
+comparación.
+
+### Inventario sobre una instancia real
+
+369 nodos alcanzables (profundidad ≤ 6, ≤ 40 hijos por nodo): 346 representados
+por valor, 23 opacos, 27 alcanzables sólo a través de un opaco. El cociente no
+es una medida física; lo que importa es *cuáles*.
+
+| opaco | origen |
+|---|---|
+| `_db`, `_lock`, `kdtree`, `stylometric`, `_spectral` | exclusión declarada |
+| `LinkType`, `EnumType`, `function`, `type` | código y singletons internados, inertes |
+| **`_author_profiles[k]` (`AuthorStyleProfile`, `deque`)** | **ceguera accidental** |
+
+`kdtree` es una exclusión declarada **con consecuencia**: una sonda que
+corrompiera el índice en el lugar sería invisible. `_db._prev_audit_hash` —la
+cabeza de la cadena de auditoría— también queda escondido bajo una exclusión
+declarada.
+
+Las exclusiones ahora llevan justificación escrita y un test falla si
+`OPAQUE_ATTRS` y las justificaciones se separan, o si aparece un opaco nuevo que
+no sea código ni enum. Ignorancia accidental convertida en decisión auditable.
+
+### Cuatro cegueras, confirmadas empíricamente
+
+| mutación | gate |
+|---|---|
+| objeto opaco inyectado, mutado por el core durante la sonda | **verde** |
+| `_author_profiles[k]._samples[0].avg_sentence_length: 8.0 → 999.0` | **verde** |
+| aliasing roto: dos atributos al mismo objeto → copia de igual valor | **verde** |
+| mutación transitoria `S0 → S1 → S0` | **verde** |
+| control positivo: mutación persistente representable | rojo (detecta) |
+
+La segunda no es artificial: es un fingerprint vivo de la ventana rodante que
+alimenta la comparación forense estilométrica.
+
+Quedan congeladas como tests de caracterización marcados `KNOWN_BLINDNESS`,
+verdes hoy. **No son propiedades.** Cuando aterrice el witness hay que
+**invertirlas**, no borrarlas.
+
+### Tres claims distintos, ninguno llamado `pure=True`
+
+```
+before == after                    → sin mutación de valor persistente observada
+alias_graph_before == after        → sin mutación de topología de identidad observada
+write_log == []                    → no hubo mutación por las rutas instrumentadas
+```
+
+El digest actual intenta el primero. El tercero no es alcanzable por
+introspección before/after —ninguna comparación de estado final puede ver
+`S0 → S1 → S0`— y necesita spies sobre las operaciones mutantes
+(`__setitem__`, `add`, `append`). El test de mutación transitoria queda verde
+incluso después del witness, y el witness **no debe** reclamar cubrirlo.
+
+### El arreglo obvio no funciona
+
+Descender ingenuamente a `__dict__` desde `_canon_value()` produce
+`RecursionError`: el grafo tiene ciclos (`LinkType.__objclass__` → la clase enum
+→ su `__dict__` → los miembros → vuelta).
+
+La detección de ciclos no es una optimización, es requisito de corrección — y es
+la misma tabla de nodos indexada por `id()` que hace falta para responder la
+pregunta de topología de identidad. Las dos necesidades convergen en la misma
+estructura, que es el argumento a favor del `StateWitness` explícito y en contra
+de un `structural_digest()` cada vez más mágico.
+
+**No implementado a propósito.** Establecer qué puede afirmar el instrumento va
+antes de cambiar lo que hace.
