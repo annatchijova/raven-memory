@@ -114,22 +114,34 @@ def test_future_activation_scores_exactly_like_now(tmp_path, label, skew):
     """Every future timestamp collapses to the same effective age of zero, so
     +1 second and +3 years must be indistinguishable from `now`."""
     ref = build(tmp_path, "ref.db")
-    now = time.time()
-    set_all_activations(ref, now)
+    t0 = time.time()
+    set_all_activations(ref, t0)
     ref = reopen(ref)
     baseline = {r.memory.content: r.recency_bonus
                 for r in ref.recall(near("cluster", 0), top_k=10)[0]}
 
     eng = build(tmp_path, f"fut_{int(skew)}.db")
-    set_all_activations(eng, now + skew)
+    set_all_activations(eng, t0 + skew)
     eng = reopen(eng)
     observed = {r.memory.content: r.recency_bonus
                 for r in eng.recall(near("cluster", 0), top_k=10)[0]}
+    elapsed = time.time() - t0
+
+    # The reference group was stamped at t0 and is therefore genuinely OLDER
+    # than "now" by however long this test took; the future group clamps to an
+    # age of zero. The only admissible difference is what that elapsed
+    # wall-clock explains — the same treatment the ranking test already used. A
+    # fixed epsilon was wrong here: 1e-6 is exceeded once elapsed passes ~2.5 s,
+    # so on a slower machine or under load this was a latent flake.
+    tolerance = RECENCY_WEIGHT * (
+        1.0 - math.exp(-math.log(2) * elapsed / RECENCY_HALFLIFE)
+    ) + 1e-12
 
     assert observed.keys() == baseline.keys()
     for k in baseline:
-        assert observed[k] == pytest.approx(baseline[k], abs=1e-6), (
-            f"{label}: {k!r} scored differently from an activation at now"
+        assert observed[k] == pytest.approx(baseline[k], abs=tolerance), (
+            f"{label}: {k!r} differs by more than the elapsed wall-clock "
+            f"({elapsed:.3f}s, tolerance {tolerance:.3e}) explains"
         )
 
 

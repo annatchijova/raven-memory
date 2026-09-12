@@ -249,23 +249,49 @@ def test_link_identity_is_the_endpoint_pair_established_by_constraint(tmp_path):
 
 
 def test_wal_means_the_file_is_not_the_whole_state(tmp_path):
-    """A DBWitness that reads the database file without checkpointing can
-    observe a different database than the engine does. Found while building
-    these adversaries: a plain file copy produced an empty schema."""
-    db, copy_path = tmp_path / "h.db", tmp_path / "h_copy.db"
+    """A DBWitness reading the database file without checkpointing can observe a
+    different database than the engine does.
+
+    The first version of this test asserted that an uncheckpointed copy has no
+    `memories` table, which is how it was first observed. That assertion is
+    ORDER-DEPENDENT and was wrong to make: SQLite's automatic checkpoint is
+    PASSIVE and opportunistic, so the main file may already hold some, all or
+    none of the committed pages. Measured across six runs with and without a
+    held-open connection, an uncheckpointed copy showed: no table at all, the
+    table with 0 rows, with 8, and with 9 — against 14 rows actually committed.
+
+    So the deterministic facts are asserted and the opportunistic one is not:
+      * committed state exists OUTSIDE the main file (the -wal is non-empty);
+      * an uncheckpointed copy is never MORE complete than reality, and may be
+        short by any amount;
+      * a checkpointed copy matches exactly — which is what DBWitness must do.
+    """
+    db = tmp_path / "h.db"
     build(db)
-    shutil.copy(db, copy_path)          # no checkpoint
+
+    wal = Path(str(db) + "-wal")
+    assert wal.exists() and wal.stat().st_size > 0, (
+        "no write-ahead log — re-derive whether DBWitness still needs to "
+        "checkpoint before reading"
+    )
+
+    copy_path = tmp_path / "h_copy.db"
+    shutil.copy(db, copy_path)                     # deliberately no checkpoint
     with sqlite3.connect(copy_path) as conn:
-        uncheckpointed = conn.execute(
+        has_table = conn.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE name='memories'").fetchone()[0]
+        uncheckpointed_rows = (
+            conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+            if has_table else 0
+        )
 
     checkpointed_path = tmp_path / "h_ck.db"
     clone(db, checkpointed_path)
     with sqlite3.connect(checkpointed_path) as conn:
         rows = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
 
-    assert rows == len(TEXTS)
-    assert uncheckpointed == 0, (
-        "WAL no longer hides the data — re-derive whether DBWitness still needs "
-        "to checkpoint before reading"
+    assert rows == len(TEXTS), "a checkpointed copy must match the engine exactly"
+    assert uncheckpointed_rows <= rows, (
+        "an uncheckpointed copy reported MORE rows than were committed — that "
+        "would break the direction of the hazard, not just its magnitude"
     )
