@@ -1,8 +1,9 @@
 # InterventionSpec — sondas causales sobre el recall (diseño, pre-implementación)
 
-**Estado:** diseño. Nada implementado todavía. v1 implementa un solo modo
-(`suppress`); el resto de los modos están nombrados acá para fijar la forma del
-tipo, no para construirse ahora.
+**Estado:** v1 implementado (`AdaptiveMemoryEngine.intervene`,
+`raven/intervention.py`, `tests/test_intervention.py`). Un solo modo
+(`suppress`) y una sola etapa (`field`); el resto está nombrado acá para fijar
+la forma del tipo y es **rechazado en runtime**, no ignorado.
 
 **Origen:** inspirado en la inhibición óptica reversible de la optogenética
 (loss-of-function transitorio en vez de lesión permanente). La metáfora se puede
@@ -322,3 +323,56 @@ clase de test que no puede fallar.
 6. **Oráculo del invariante** — un caso construido donde el rescate debe sostenerse,
    y un caso donde la memoria `REINFORCED` sale legítimamente por inalcanzabilidad,
    comprobando que el fuzzer los distingue.
+
+---
+
+## 12. v1 — lo que efectivamente quedó
+
+| Gate | Dónde |
+|---|---|
+| 1. `_recall_core()` sin efectos | `memory_engine.py` — devuelve `pending_alerts` / `enforce_forget` en vez de escribirlos |
+| 2. Un snapshot y un `now` para ambas ramas | `intervene()` los fija antes de las dos llamadas al core |
+| 3. `stage="field"` únicamente | `INTERVENTION_STAGES`; `readout` reservado y rechazado |
+| 4. Modo/etapa desconocidos → error | `InterventionError`, incluidas claves extra en `from_dict` |
+| 5. Targets resueltos en el payload v4 | `_resolve_targets()` → `{memory_id, cell_id}` sellado |
+| 6. `None` preserva hashes históricos | clave omitida, no `null` — test con oráculo independiente |
+| 7. Orden determinista | `sort(key=(-final_score, memory_id))` |
+| 8. Diagnostics por memoria | `ExclusionReason`, `absence_reason()` |
+| 9. La sonda no toca STDP/activaciones/estados/links | comparación de estado persistente antes/después |
+| 10. Comportamiento futuro indistinguible | dos campos gemelos, uno sondeado, recalls posteriores idénticos |
+
+Los cinco controles negativos (romper la supresión del bypass sináptico, hacer
+que la sonda escriba activaciones, serializar `null`, quitar el desempate,
+dejar que una celda silenciada siembre la búsqueda) fallan el test que les
+corresponde y sólo ese.
+
+### Hallazgo empírico: la influencia se manifiesta como descenso, no como borrado
+
+La primera corrida real de la sonda contradice una suposición del diseño. Sobre
+un campo sintético de 42 celdas en 3 clusters, 12 combinaciones
+(memoria observada × conjunto suprimido):
+
+| criterio | resultado |
+|---|---|
+| sólo desaparición | 12 / 12 `NO_DEPENDENCE` |
+| desplazamiento de rango ≥ 1 | 6 `MULTIPLE_NECESSARY`, 3 `SINGLE_NECESSARY`, 3 `NO_DEPENDENCE` |
+
+La causa está en `_rebuild_kdtree()`: el grafo k-NN se **simetriza**
+(`cell_neighbors[n].add(cell)`), así que toda celda activa conserva K aristas y
+casi nunca queda topológicamente aislada. Suprimir celdas rara vez borra una
+memoria del campo; lo que hace es correrla de lugar.
+
+Consecuencia práctica: `dropped()` es un criterio demasiado grueso para este
+motor. `Ablation.moved(min_rank_shift=n)` es el que lleva la señal, y
+`classify_dependence()` lo toma como parámetro.
+
+`REDUNDANT_PATHS` —la firma que justifica la ablación combinatoria— está
+implementado y su lógica testeada, pero **no se observó todavía en un campo
+real**. Queda como hipótesis abierta, no como capacidad demostrada.
+
+### Fuera del alcance de v1
+
+La primitiva es de motor: no hay endpoint REST ni herramienta MCP. Exponerla
+es la extensión obvia, y cuando se haga, la superficie pública tiene que usar
+`retrieval_causal_influence` y nunca sugerir causalidad sobre la respuesta del
+agente (§1).

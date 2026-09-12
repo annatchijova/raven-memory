@@ -48,7 +48,7 @@ _AUDIT_COLS = (
     "cells_activated", "memories_retrieved", "total_candidates",
     "filtered_by_state", "filtered_by_estilometria", "filtered_by_inhibitory",
     "synaptic_activated", "returned_to_agent", "audit_hash", "prev_hash",
-    "qemb_sha256",
+    "qemb_sha256", "intervention",
 )
 _ALERT_COLS = (
     "alert_id", "timestamp", "memory_id", "detected_author",

@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+### Added — causal intervention probes (docs/INTERVENTION_DESIGN.md)
+- **`AdaptiveMemoryEngine.intervene(query, InterventionSpec)`** — measures the
+  *retrieval causal influence* of silencing a set of cells: runs the scoring
+  core twice (baseline and `do(suppress)`) against one field snapshot, under one
+  lock, sharing one timestamp, and returns a decomposed delta. The claim is
+  scoped to RAVEN's retrieval, never to a downstream agent's answer.
+- **`_recall_core()`** — the scoring pipeline extracted as a pure function.
+  `recall()` is now that core plus its effects (STDP, activation timestamps,
+  alerts, audit). A probe runs the same core and discards the effects, so
+  "the probe does not mutate the field" is structural rather than a convention.
+- **Per-memory exclusion provenance** (`ExclusionReason`, `absence_reason()`) —
+  direct suppression, inhibition, unreachability and state/layer filtering are
+  now distinguishable. The engine can answer why something did *not* surface,
+  not only why something did.
+- **`raven/intervention.py`** — single, pairwise and seeded-random subset
+  ablation, a dependence taxonomy, and targeted fuzzing of the rescue rule
+  ("a validated truth cannot be silenced by an unverified claim") whose oracle
+  separates inhibition from legitimate topological exits.
+- **Schema v4** — `audit_log.intervention`. A probe seals its *resolved* target
+  population (memory_id → cell_id) and both branches' outcome into the hash
+  chain under the operation `recall_intervention`.
+
+### Changed
+- Recall results are now ordered by `(-final_score, memory_id)`. Ties
+  previously fell back to insertion order, which is unstable on the >999-cell
+  chunked load path — a rank delta could have been a sorting artifact.
+- Unknown intervention modes, stages or fields raise `InterventionError`. A
+  silently ignored intervention would yield delta = 0, which is
+  indistinguishable from the genuine finding "no causal influence".
+
+### Compatibility
+- Audit rows without an intervention omit the key from the hashed payload
+  entirely (never `null`), so every pre-v4 chain keeps verifying.
+- `raven/portability.py` exports/imports the new column; a round-tripped field
+  still verifies.
+
 ## 1.2.0 — 2026-08-29
 
 Full execution of [the improvement plan](docs/IMPROVEMENT_PLAN.md) (Fases 0–4).
