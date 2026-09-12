@@ -376,3 +376,75 @@ La primitiva es de motor: no hay endpoint REST ni herramienta MCP. Exponerla
 es la extensión obvia, y cuando se haga, la superficie pública tiene que usar
 `retrieval_causal_influence` y nunca sugerir causalidad sobre la respuesta del
 agente (§1).
+
+---
+
+## 13. Pasada adversarial sobre v1 (`tests/test_intervention_properties.py`)
+
+Tres propiedades metamórficas más pureza, sobre el commit congelado. Dos
+hallazgos de producto salieron de acá, ninguno introducido por la sonda.
+
+### Hallazgo A — `now` está fijo dentro de una sonda, no entre sondas
+
+`intervene()` toma `time.time()` una vez por llamada. Dentro de la sonda las dos
+ramas lo comparten, así que el término de recencia se cancela en la resta y el
+**Δ es exactamente reproducible**. Pero dos sondas distintas corren a `now`
+distintos, así que sus *scores absolutos* difieren (~1e-8 por llamada) y no son
+comparables bit a bit.
+
+Consecuencia para el runner futuro: un barrido que quiera comparar sondas
+*entre sí* —no sólo el Δ interno de cada una— necesita un `now` inyectable.
+Hoy no existe. El Δ de cada sonda no está afectado.
+
+### Hallazgo B — `recency_bonus` no acota edad negativa (pre-existente en `main`)
+
+`recency_bonus = 0.05 · exp(−ln2 · age / 24h)` con `age < 0` **crece sin
+límite** en vez de decaer. Con `last_activation` en el futuro:
+
+| desfasaje | score top |
+|---|---:|
+| +1 día | 1.1 |
+| +10 días | 52.2 |
+| +30 días | 5.4e7 |
+| +90 días | 6.2e25 |
+| ~+2.8 años | `OverflowError` |
+
+Verificado idéntico en `e539df8` (= `main`), así que **no es regresión del
+refactor**: la pasada adversarial lo destapó.
+
+Alcanzable sin tocar la base a mano: `portability.import_field()` copia
+`last_activation` literal, así que un campo importado desde una máquina con el
+reloj adelantado —o un salto de NTP hacia atrás— produce ranking basura **en
+silencio**, sin `degraded`, sin warning. Es exactamente el modo de falla que el
+principio de degradación honesta del repo existe para prohibir.
+
+Arreglo propuesto (una línea, no aplicado — decisión pendiente):
+`age = max(0.0, now - mem.last_activation)`.
+
+### Lo que los controles negativos dijeron de los tests mismos
+
+| control | resultado |
+|---|---|
+| el core muta `cell_neighbors` | rojo en pureza |
+| el core contamina `_alerted_memories` | rojo en pureza |
+| las ramas corren con parámetros distintos | rojo en sham |
+| supresión dependiente del orden | **verde — no detectado** |
+| se quita el `sort` de `_resolve_targets` | rojo en ambos tests de orden |
+
+La conmutatividad conductual **no puede fallar**: `_resolve_targets` ordena por
+`cell_id` y el core recibe un `FrozenSet`, así que el orden queda normalizado
+dos veces antes de alcanzar cualquier lógica. El test se reescribió para afirmar
+esos dos puntos de normalización —que sí se rompen detectablemente— en vez de
+sostener una tautología en verde.
+
+Tercer test inútil encontrado por control negativo, en el lote escrito
+específicamente para ser riguroso.
+
+### Pureza: sin rastro
+
+`structural_digest()` recorre `vars(engine)` genéricamente (un atributo nuevo
+queda cubierto solo; una lista escrita a mano deja de testear lo que olvida).
+Tras una batería de sondas —vacía, simples, pares, con `current_turn_memories`—
+ningún atributo del engine difiere. El core **aliasea** estructuras del engine
+en vez de copiarlas (`all_cell_links = self._cell_links_index`), así que "no
+ejecutó SQL" no habría alcanzado como evidencia.
