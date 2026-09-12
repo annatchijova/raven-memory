@@ -3,51 +3,45 @@
 """
 StateWitness — a bounded, fail-closed record of engine-owned runtime state.
 
-Successor instrument to `structural_digest()`, whose autopsy is in
-tests/test_digest_coverage.py. Two things that autopsy established drive this
-design:
+Successor to `structural_digest()`, whose autopsy is in
+tests/test_digest_coverage.py. Rebuilt after the adversarial round in
+tests/test_state_witness_attacks.py landed three defects on its first version.
 
-  * `("opaque", type_name)` for anything unrecognised is a lie shaped like a
-    result. Here an engine-owned mutable object the walker cannot represent
-    raises `UnrepresentableState(path, type)`. Fail closed, never summarise.
+Three rules carry the design.
 
-  * An unrestricted "every reachable Python object" walk is not state, it is
-    interpreter reachability — instance → Enum → class → functions → globals →
-    modules. The naive version raised RecursionError on
-    `LinkType.__objclass__`. The boundary here is SEMANTIC, not mechanical.
+1. SEMANTIC IDENTITY BOUNDARY BEFORE REPRESENTATION.
+   The first version asked CPython whether two ones are the same one. Small
+   integers are interned, so `1` inside a freshly attached dict IS the `1` in
+   `_active_cells`, and the identity graph recorded "sharing" that is not
+   engine topology — then canonical-path naming turned one new alias into a
+   rename of 19 unrelated edges. Value terminals are NOT identity nodes.
+   `tracks_identity()` says which classifications are, as a concept separate
+   from descendability: today they coincide, and that coincidence is not
+   allowed to become architecture by accident.
 
-It answers two questions that the old digest conflated into one green:
+2. OBSERVATION EXECUTES NOTHING THE OBSERVED OBJECT DEFINES.
+   No `__repr__`, `__str__`, `__eq__`, `__lt__`, `__hash__`, no properties or
+   descriptors, no `getattr` on observed state — `vars()` only. An instrument
+   that runs arbitrary behaviour while looking at state can itself mutate it.
+   Dispatch is by EXACT type, because a `str` or `dict` subclass can override
+   the protocols that would otherwise be assumed safe.
 
-    value_signature   — what the state IS
-    alias_signature   — which references point at the SAME object
+3. FAIL CLOSED, NEVER SUMMARISE.
+   An engine-owned mutable with no policy raises `UnrepresentableState`. An
+   unsupported dict key raises. "Unknown Python type" is not "unknown mutable
+   state": inert value objects are supported through an explicit registry with
+   written reasons, never through a `__slots__` heuristic — `__slots__` implies
+   neither immutability nor value semantics.
 
-so that "two attributes stopped sharing one object, but the copies are equal"
-is reported as value-equal and topology-changed, instead of as identical.
+Two independent claims, and the vocabulary is deliberately unusable as `pure`:
 
-What it CANNOT do, by construction: observe S0 → S1 → S0. No before/after
-comparison can. That needs a MutationJournal instrumenting write surfaces, and
-its claim would be bounded to "no mutation through instrumented surfaces",
-never "no mutation".
+    persistent_value_state_equal       what the state IS
+    persistent_alias_topology_equal    which references share a mutable object
+    persistent_root_identity_equal     (comparator only — see StateComparison)
 
-CONFIRMED DEFECTS (tests/test_state_witness_attacks.py), not yet fixed:
-
-  1. The alias graph is polluted by interned value atoms. `id(1)` inside a
-     freshly attached dict IS the `1` inside `_active_cells`, so the graph
-     records "sharing" that is not engine topology. Combined with canonical-path
-     naming, attaching one new alias renamed 19 UNRELATED edges. The fix is not
-     a better naming scheme: value terminals must not participate in the
-     identity graph at all.
-  2. Observation executes the observed object's code. `repr()` runs on set
-     members and dict keys, and a comparison-driven sort can run `__eq__`. A
-     purity instrument that executes arbitrary object behaviour can itself be
-     a source of mutation.
-  3. Dict keys and set members are canonicalised through `repr()`, so a default
-     `__repr__` embeds a heap address in the signature. Stable within a process
-     for the same object, but not reproducible across processes, and two
-     equal-but-distinct key objects compare as different states.
-
-Until 1 is fixed, `persistent_alias_topology_equal` compares a rooted,
-path-labelled RENDERING of the topology, not the topology.
+Out of reach by construction: S0 → S1 → S0. No before/after comparison sees it.
+That needs a MutationJournal over instrumented write surfaces, whose claim would
+be bounded to "no mutation through instrumented surfaces".
 
 Not a pytest module — an instrument used by tests.
 """
@@ -55,12 +49,15 @@ Not a pytest module — an instrument used by tests.
 from __future__ import annotations
 
 import collections
-import dataclasses
+import datetime as _dt
+import decimal as _dec
 import enum
 import hashlib
+import pathlib as _pl
 import types
+import uuid as _uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -69,90 +66,245 @@ MAX_FANOUT = 512
 
 
 class UnrepresentableState(AssertionError):
-    """An engine-owned mutable object the witness has no policy for.
+    """Engine-owned state the witness has no policy for.
 
-    Deliberately an AssertionError: a purity claim over state the instrument
-    could not represent is the exact failure mode this whole exercise exists to
-    remove, so it fails the test rather than degrading the report.
+    An AssertionError on purpose: a purity claim over state the instrument could
+    not represent is the exact failure this whole exercise exists to remove, so
+    it fails the test instead of degrading the report.
     """
 
-    def __init__(self, path: str, obj: Any):
+    def __init__(self, path: str, obj: Any, detail: str = ""):
+        self.path = path
+        self.runtime_type = type(obj).__name__
         super().__init__(
-            f"no witness policy for engine-owned mutable state at {path!r} "
-            f"(type {type(obj).__name__}). Add a DESCEND rule, a "
-            f"TERMINAL_BY_IDENTITY justification, or an explicit exclusion — "
-            f"do not let it be summarised away."
+            f"no witness policy for engine-owned state at {path!r} "
+            f"(type {self.runtime_type}){(': ' + detail) if detail else ''}. "
+            "Add a classification rule, register it as a safe value type with a "
+            "written reason, or exclude it as a semantic subsystem with its own "
+            "witness — do not let it be summarised away."
         )
-        self.path, self.runtime_type = path, type(obj).__name__
 
 
-DESCEND = "DESCEND"
-TERMINAL_BY_VALUE = "TERMINAL_BY_VALUE"
-TERMINAL_BY_IDENTITY = "TERMINAL_BY_IDENTITY"
-EXCLUDED = "EXCLUDED"
+# ----------------------------------------------------------
+# Classification — the semantic ownership boundary
+# ----------------------------------------------------------
 
-_VALUE_ATOMS = (type(None), bool, int, float, str, bytes, complex)
+VALUE_TERMINAL = "VALUE_TERMINAL"
+IDENTITY_TERMINAL = "IDENTITY_TERMINAL"
+OWNED_MUTABLE_CONTAINER = "OWNED_MUTABLE_CONTAINER"
+OWNED_IMMUTABLE_CONTAINER = "OWNED_IMMUTABLE_CONTAINER"
+OWNED_OBJECT = "OWNED_OBJECT"
+EXCLUDED_SEMANTIC_SUBSYSTEM = "EXCLUDED_SEMANTIC_SUBSYSTEM"
+UNSUPPORTED_MUTABLE = "UNSUPPORTED_MUTABLE"
 
-# Immutable value objects that happen to use __slots__, so the mutability
-# heuristic would misread them as unknown mutable state and fail closed on
-# something inert. Each entry is a DECISION, not a convenience: these carry
-# value semantics for our purpose and have no engine-owned interior.
-#   PurePath — a path is a value; its parts are derived, not mutable state.
-#   Decimal / datetime / date / time / timedelta / UUID — immutable scalars.
-# "Unknown Python type" must not be equivalent to "unknown mutable state":
-# the fail-closed requirement is about engine-owned MUTABLE state.
-import datetime as _dt
-import decimal as _dec
-import pathlib as _pl
-import uuid as _uuid
+_DESCENDS = frozenset({
+    OWNED_MUTABLE_CONTAINER, OWNED_IMMUTABLE_CONTAINER, OWNED_OBJECT,
+})
+_TRACKS_IDENTITY = frozenset({OWNED_MUTABLE_CONTAINER, OWNED_OBJECT})
 
-_VALUE_SEMANTIC_TYPES = (
-    _pl.PurePath, _dec.Decimal, _dt.datetime, _dt.date, _dt.time,
-    _dt.timedelta, _uuid.UUID,
-)
+
+def descends(classification: str) -> bool:
+    """Whether the walker looks inside."""
+    return classification in _DESCENDS
+
+
+def tracks_identity(classification: str) -> bool:
+    """Whether "the same object" is a meaningful statement about this node.
+
+    Deliberately a separate predicate from `descends()`. The two agree on every
+    classification that exists today — an immutable container is the one that
+    splits them — and keeping them separate stops a coincidence from hardening
+    into architecture. Sharing an interned int, a string or an enum member says
+    nothing about engine state; sharing a dict does.
+    """
+    return classification in _TRACKS_IDENTITY
+
+
+# Exact types only. `isinstance` would accept a subclass that overrides the very
+# protocols these canonicalisers rely on being builtin.
+def _atom(obj: Any) -> Any:
+    return (type(obj).__name__, repr(obj))      # exact builtin repr, not user code
+
+
+def _canon_path(obj: _pl.PurePath) -> Any:
+    # PurePath.__str__ is stdlib, not user-defined; a path IS a value and its
+    # parts are derived rather than mutable state.
+    return ("path", type(obj).__name__, str(obj))
+
+
+def _canon_decimal(obj) -> Any:
+    return ("decimal", str(obj))
+
+
+def _canon_datetimeish(obj) -> Any:
+    return ("datetimeish", type(obj).__name__, obj.isoformat()
+            if hasattr(type(obj), "isoformat") else str(obj))
+
+
+def _canon_timedelta(obj) -> Any:
+    return ("timedelta", obj.days, obj.seconds, obj.microseconds)
+
+
+def _canon_uuid(obj) -> Any:
+    return ("uuid", obj.hex)
+
+
+def _canon_ndarray(obj: np.ndarray) -> Any:
+    return ("ndarray", obj.dtype.str, obj.shape,
+            hashlib.sha256(np.ascontiguousarray(obj).tobytes()).hexdigest())
+
+
+# Registry, not a heuristic. Every entry is a decision with a reason recorded in
+# SAFE_VALUE_REASONS. __slots__ is NOT a membership criterion: it implies
+# neither immutability nor value semantics, and an unregistered __slots__ object
+# fails closed.
+SAFE_VALUE_TYPES: Dict[type, Callable[[Any], Any]] = {
+    type(None): _atom, bool: _atom, int: _atom, float: _atom,
+    str: _atom, bytes: _atom, complex: _atom,
+    _pl.PurePath: _canon_path, _pl.PurePosixPath: _canon_path,
+    _pl.PureWindowsPath: _canon_path, _pl.Path: _canon_path,
+    _pl.PosixPath: _canon_path, _pl.WindowsPath: _canon_path,
+    _dec.Decimal: _canon_decimal,
+    _dt.datetime: _canon_datetimeish, _dt.date: _canon_datetimeish,
+    _dt.time: _canon_datetimeish, _dt.timedelta: _canon_timedelta,
+    _uuid.UUID: _canon_uuid,
+    np.ndarray: _canon_ndarray,
+}
+
+SAFE_VALUE_REASONS = {
+    "builtin atoms": "immutable, and their repr is C-level for the exact type",
+    "paths": "a path is a value; its parts are derived, not mutable state",
+    "decimal/datetime/uuid": "immutable scalars with stdlib canonical forms",
+    "ndarray": "mutable buffer, but identity is irrelevant to retrieval state; "
+               "contents are fingerprinted by SHA-256 over the exact bytes",
+}
+
 _IDENTITY_TYPES = (
     types.FunctionType, types.BuiltinFunctionType, types.MethodType,
-    types.ModuleType, type,
+    types.ModuleType, types.WrapperDescriptorType,
+    types.MethodWrapperType, types.MethodDescriptorType, type,
 )
-_ORDERED_CONTAINERS = (list, tuple, collections.deque)
-_UNORDERED_CONTAINERS = (set, frozenset)
+
+_MUTABLE_CONTAINERS = (dict, list, set, bytearray, collections.deque,
+                       collections.OrderedDict, collections.defaultdict)
+_IMMUTABLE_CONTAINERS = (tuple, frozenset)
+
+
+def classify(obj: Any) -> str:
+    """One classification, used by BOTH claims.
+
+    Value and identity may REPRESENT a node differently, but they must not
+    decide independently what belongs to the state — two incompatible notions of
+    ownership inside one walker is how a blind spot gets reintroduced.
+    """
+    t = type(obj)
+    if t in SAFE_VALUE_TYPES:
+        return VALUE_TERMINAL
+    if isinstance(obj, enum.Enum):
+        return VALUE_TERMINAL            # interned members; kills __objclass__
+    if isinstance(obj, _IDENTITY_TYPES):
+        return IDENTITY_TERMINAL
+    if t in _MUTABLE_CONTAINERS:
+        return OWNED_MUTABLE_CONTAINER
+    if t in _IMMUTABLE_CONTAINERS:
+        return OWNED_IMMUTABLE_CONTAINER
+    if hasattr(t, "__dict__") and hasattr(obj, "__dict__"):
+        return OWNED_OBJECT
+    return UNSUPPORTED_MUTABLE
+
+
+def is_mutable(classification: str) -> bool:
+    return classification in (OWNED_MUTABLE_CONTAINER, OWNED_OBJECT)
+
+
+def canonical_value(obj: Any, classification: str, path: str) -> Any:
+    """Inert token for a node. Executes nothing the observed object defines."""
+    if classification == VALUE_TERMINAL:
+        t = type(obj)
+        if t in SAFE_VALUE_TYPES:
+            return SAFE_VALUE_TYPES[t](obj)
+        if isinstance(obj, enum.Enum):
+            return ("enum", type(obj).__name__, obj.name)
+        raise UnrepresentableState(path, obj, "value terminal without canonicaliser")
+    if classification == IDENTITY_TERMINAL:
+        # Name from the type, never repr(): a metaclass could define one.
+        return ("code", type(obj).__name__,
+                getattr(type(obj), "__name__", "?"))
+    if classification == OWNED_MUTABLE_CONTAINER:
+        t = type(obj)
+        if t is bytearray:
+            return ("bytearray", bytes(obj).hex())
+        if issubclass(t, dict):
+            return ("dict", t.__name__, len(obj))
+        if t in (set,):
+            return ("set", len(obj))
+        return (t.__name__, len(obj))
+    if classification == OWNED_IMMUTABLE_CONTAINER:
+        return (type(obj).__name__, len(obj))
+    if classification == OWNED_OBJECT:
+        return ("object", type(obj).__name__, sorted(vars(obj).keys()))
+    raise UnrepresentableState(path, obj)
+
+
+def key_token(key: Any, path: str) -> Any:
+    """A dict key as an inert token, never `repr(key)`.
+
+    The first version turned keys into strings, which executed user `__repr__`
+    and embedded heap addresses in the signature — two of the three confirmed
+    defects at once. A key outside the supported value domain fails closed
+    rather than being stringified.
+    """
+    t = type(key)
+    if t in SAFE_VALUE_TYPES:
+        return SAFE_VALUE_TYPES[t](key)
+    if isinstance(key, enum.Enum):
+        return ("enum", type(key).__name__, key.name)
+    if t is tuple:
+        return ("tuple", tuple(key_token(k, path) for k in key))
+    if t is frozenset:
+        return ("frozenset", tuple(sorted(
+            (key_token(k, path) for k in key), key=lambda tok: repr(tok)
+        )))
+    raise UnrepresentableState(
+        path, key, "unsupported dict key type — keys must be value-semantic"
+    )
 
 
 @dataclass
 class WitnessNode:
     witness_id: int
     runtime_type: str
+    classification: str
     canonical_value: Any
     mutable: bool
-    policy: str
+    tracks_identity: bool
 
 
 @dataclass
-class StateWitness:
+class StateSnapshot:
+    """What was observed. Carries no cross-snapshot relation — `root_identity`
+    belongs to the comparator, since it is a statement about two captures of the
+    same process rather than canonicalisable state."""
     nodes: Dict[int, WitnessNode] = field(default_factory=dict)
-    edges: List[Tuple[int, str, int]] = field(default_factory=list)
+    edges: List[Tuple[int, Any, int]] = field(default_factory=list)
     roots: Dict[str, int] = field(default_factory=dict)
     exclusions: List[Tuple[str, str, str]] = field(default_factory=list)
     truncations: List[str] = field(default_factory=list)
-    _canon_path: Dict[int, str] = field(default_factory=dict)
-
-    # ---- the two independent claims ----
+    canonical_paths: Dict[int, str] = field(default_factory=dict)
+    engine_id: Optional[int] = None
 
     def value_signature(self) -> Dict[str, Any]:
-        """Value at every reachable path.
-
-        Indexed by path rather than by node, so two paths that share one object
-        and two paths holding equal copies produce the SAME signature. That is
-        the point: this claim is about what the state is, not about how it is
-        wired.
-        """
+        """Value at every reachable path. Indexed by PATH, so sharing one object
+        and holding equal copies give the same answer — that is what keeps this
+        claim independent of the wiring."""
         out: Dict[str, Any] = {}
-        stack: List[Tuple[str, int, Tuple[int, ...]]] = [
-            (f"engine.{name}", wid, ()) for name, wid in sorted(self.roots.items())
-        ]
-        children = collections.defaultdict(list)
+        children: Dict[int, List[Tuple[Any, int]]] = collections.defaultdict(list)
         for parent, label, child in self.edges:
             children[parent].append((label, child))
+        stack: List[Tuple[str, int, Tuple[int, ...]]] = [
+            (f"engine.{name}", wid, (self.engine_id,) if self.engine_id else ())
+            for name, wid in sorted(self.roots.items())
+        ]
         while stack:
             path, wid, seen = stack.pop()
             node = self.nodes[wid]
@@ -163,104 +315,76 @@ class StateWitness:
             if len(seen) >= MAX_DEPTH:
                 out[path] = ("<depth-bound>", node.runtime_type)
                 continue
-            for label, child in sorted(children.get(wid, []), key=lambda t: t[0]):
-                stack.append((f"{path}{label}", child, seen + (wid,)))
+            for label, child in sorted(children.get(wid, []), key=lambda t: repr(t[0])):
+                stack.append((f"{path}|{label!r}", child, seen + (wid,)))
         return out
 
-    def alias_signature(self) -> Set[Tuple[str, str, str]]:
-        """Which references point at the same object.
+    def alias_signature(self) -> Set[Tuple[str, Any, str]]:
+        """Which references share a MUTABLE object.
 
-        Nodes are named by their canonical path (shortest, then lexicographic)
-        rather than by `id()`, which is not comparable across two witnesses.
-        Sharing shows up as two different parents naming one canonical child.
+        Edges are kept only when both endpoints track identity, so interned
+        atoms, enum members and code objects cannot manufacture topology. Nodes
+        are named by canonical path because `id()` is not comparable across two
+        snapshots.
         """
+        keep = {wid for wid, n in self.nodes.items() if n.tracks_identity}
         return {
-            (self._canon_path[p], label, self._canon_path[c])
+            (self.canonical_paths[p], label, self.canonical_paths[c])
             for p, label, c in self.edges
+            if p in keep and c in keep
         }
 
     def root_identity(self) -> Dict[str, str]:
-        return {name: self._canon_path[wid] for name, wid in self.roots.items()}
+        return {
+            name: self.canonical_paths[wid]
+            for name, wid in self.roots.items()
+            if self.nodes[wid].tracks_identity
+        }
 
 
-def _canonical_value(obj: Any, policy: str) -> Any:
-    """Value canonicalisation ONLY.
+# Backwards-compatible alias for the earlier name.
+StateWitness = StateSnapshot
 
-    Kept deliberately separate from graph construction: a set is
-    order-independent as a value, a list is not, and a dict's key→child
-    association must survive — none of which should be decided by whatever the
-    traversal happens to find convenient.
+
+@dataclass
+class StateComparison:
+    persistent_value_state_equal: bool
+    persistent_alias_topology_equal: bool
+    persistent_root_identity_equal: bool
+    value_diff_paths: List[str]
+    alias_only_before: List[Any]
+    alias_only_after: List[Any]
+
+    def __getitem__(self, k):          # dict-style access for test readability
+        return getattr(self, k)
+
+
+def _children(obj: Any, classification: str, path: str) -> List[Tuple[Any, Any]]:
+    """Edge labels carry what the value token drops: dict keys and positions.
+
+    Set members are canonicalised to inert tokens FIRST and the TOKENS are
+    sorted — never the objects — so no comparison protocol of an observed object
+    participates in observation.
     """
-    if policy == TERMINAL_BY_IDENTITY:
-        return ("identity", getattr(obj, "__qualname__", None) or repr(obj))
-    if isinstance(obj, np.ndarray):
-        return ("ndarray", obj.dtype.str, obj.shape,
-                hashlib.sha256(np.ascontiguousarray(obj).tobytes()).hexdigest())
-    if isinstance(obj, enum.Enum):
-        return ("enum", type(obj).__name__, obj.name, repr(obj.value))
-    if isinstance(obj, _VALUE_SEMANTIC_TYPES):
-        return ("value-semantic", type(obj).__name__, str(obj))
-    if isinstance(obj, _VALUE_ATOMS):
-        return repr(obj)
-    if isinstance(obj, dict):
-        # Shape only — the children carry the values, and the key→child
-        # association is preserved by the edge labels.
-        return ("dict", sorted(repr(k) for k in obj))
-    if isinstance(obj, _UNORDERED_CONTAINERS):
-        # Order-independent by definition. Members are recorded as sorted
-        # reprs here AND as edges, so a set of mutables is still walked.
-        return (type(obj).__name__, sorted(repr(x) for x in obj))
-    if isinstance(obj, _ORDERED_CONTAINERS):
-        return (type(obj).__name__, len(obj))     # order lives in edge labels
-    if dataclasses.is_dataclass(obj) or hasattr(obj, "__dict__"):
-        return ("object", type(obj).__name__, sorted(vars(obj).keys()))
-    return ("value", repr(obj))
-
-
-def _classify(obj: Any) -> str:
-    if isinstance(obj, _VALUE_SEMANTIC_TYPES):
-        return TERMINAL_BY_VALUE
-    if isinstance(obj, enum.Enum):
-        return TERMINAL_BY_VALUE          # kills the __objclass__ recursion
-    if isinstance(obj, _VALUE_ATOMS):
-        return TERMINAL_BY_VALUE
-    if isinstance(obj, np.ndarray):
-        return TERMINAL_BY_VALUE
-    if isinstance(obj, _IDENTITY_TYPES):
-        return TERMINAL_BY_IDENTITY
-    if isinstance(obj, (dict, list, tuple, set, frozenset, collections.deque)):
-        return DESCEND
-    if dataclasses.is_dataclass(obj) or hasattr(obj, "__dict__"):
-        return DESCEND
-    return "UNKNOWN"
-
-
-def _is_mutable(obj: Any) -> bool:
-    if isinstance(obj, _VALUE_SEMANTIC_TYPES):
-        return False
-    if isinstance(obj, (dict, list, set, bytearray, collections.deque)):
-        return True
-    if isinstance(obj, np.ndarray):
-        return True
-    if isinstance(obj, _VALUE_ATOMS) or isinstance(obj, (tuple, frozenset)):
-        return False
-    if isinstance(obj, enum.Enum) or isinstance(obj, _IDENTITY_TYPES):
-        return False
-    return hasattr(obj, "__dict__") or hasattr(obj, "__slots__")
-
-
-def _children(obj: Any) -> List[Tuple[str, Any]]:
-    """Edge labels carry the structure the value canonicalisation drops:
-    dict keys, sequence positions. A set's members get repr-labels so the
-    edge set stays order-independent, matching its value semantics."""
-    if isinstance(obj, dict):
-        return [(f"[{k!r}]", v) for k, v in list(obj.items())[:MAX_FANOUT]]
-    if isinstance(obj, _ORDERED_CONTAINERS):
-        return [(f"[{i}]", v) for i, v in enumerate(list(obj)[:MAX_FANOUT])]
-    if isinstance(obj, _UNORDERED_CONTAINERS):
-        return [(f"{{{x!r}}}", x) for x in sorted(obj, key=repr)[:MAX_FANOUT]]
-    if dataclasses.is_dataclass(obj) or hasattr(obj, "__dict__"):
-        return [(f".{k}", v) for k, v in sorted(vars(obj).items())[:MAX_FANOUT]]
+    if classification == OWNED_OBJECT:
+        return [(("attr", k), v) for k, v in sorted(vars(obj).items())[:MAX_FANOUT]]
+    t = type(obj)
+    if issubclass(t, dict):
+        return [(("key", key_token(k, path)), v)
+                for k, v in list(obj.items())[:MAX_FANOUT]]
+    if t in (list, tuple, collections.deque):
+        return [(("idx", i), v) for i, v in enumerate(list(obj)[:MAX_FANOUT])]
+    if t in (set, frozenset):
+        tokens = []
+        for member in obj:
+            mcls = classify(member)
+            if mcls == UNSUPPORTED_MUTABLE:
+                raise UnrepresentableState(path, member, "unsupported set member")
+            tokens.append((canonical_value(member, mcls, path), member))
+        tokens.sort(key=lambda pair: repr(pair[0]))   # sorts TOKENS, not objects
+        return [(("member", tok), m) for tok, m in tokens[:MAX_FANOUT]]
+    if t is bytearray:
+        return []
     return []
 
 
@@ -268,90 +392,85 @@ def take_witness(
     engine,
     exclusions: Optional[Dict[str, str]] = None,
     max_depth: int = MAX_DEPTH,
-) -> StateWitness:
-    """Record engine-owned runtime state.
-
-    `exclusions` maps an attribute name to a written justification. An
-    exclusion without one is refused — an unjustified exclusion is
-    indistinguishable from an oversight six months later.
-    """
+) -> StateSnapshot:
     exclusions = exclusions or {}
     for name, why in exclusions.items():
         if not why or len(why) < 20:
             raise ValueError(f"exclusion {name!r} needs a written justification")
 
-    w = StateWitness()
+    snap = StateSnapshot()
     queue: collections.deque = collections.deque()
+
+    # The engine itself is a node, so a root-level attribute is a real EDGE.
+    # Without this the identity graph is rooted but its roots are outside it:
+    # `engine.b = engine.a` for a mutable would add no edge at all, and
+    # root-level aliasing was only ever detected indirectly, through children.
+    engine_wid = id(engine)
+    snap.engine_id = engine_wid
+    snap.nodes[engine_wid] = WitnessNode(
+        witness_id=engine_wid, runtime_type=type(engine).__name__,
+        classification=OWNED_OBJECT,
+        canonical_value=("engine", type(engine).__name__),
+        mutable=True, tracks_identity=True,
+    )
+    snap.canonical_paths[engine_wid] = "engine"
 
     for name, value in sorted(vars(engine).items()):
         if name in exclusions:
-            w.exclusions.append((f"engine.{name}", type(value).__name__,
-                                 exclusions[name]))
+            snap.exclusions.append(
+                (f"engine.{name}", type(value).__name__, exclusions[name])
+            )
             continue
-        queue.append((f"engine.{name}", value, 0, None, name))
+        queue.append((f"engine.{name}", value, 0, engine_wid, ("root", name)))
 
     visited: Set[int] = set()
     while queue:
         path, obj, depth, parent_wid, label = queue.popleft()
         wid = id(obj)
 
-        if parent_wid is None:
-            w.roots[label] = wid
-        else:
-            w.edges.append((parent_wid, label, wid))
+        snap.edges.append((parent_wid, label, wid))
+        if parent_wid == snap.engine_id and isinstance(label, tuple) \
+                and label[0] == "root":
+            snap.roots[label[1]] = wid
 
-        # Shortest path wins; ties broken lexicographically. Stable across
-        # witnesses, unlike id().
-        prev = w._canon_path.get(wid)
+        prev = snap.canonical_paths.get(wid)
         if prev is None or (len(path), path) < (len(prev), prev):
-            w._canon_path[wid] = path
+            snap.canonical_paths[wid] = path
 
         if wid in visited:
-            # Back-edge: recorded above, not re-walked. This is what makes a
-            # cyclic engine-owned structure terminate WITHOUT losing the cycle.
-            continue
+            continue                       # back-edge recorded above, not re-walked
         visited.add(wid)
 
-        policy = _classify(obj)
-        mutable = _is_mutable(obj)
-        if policy == "UNKNOWN":
-            if mutable:
-                raise UnrepresentableState(path, obj)
-            policy = TERMINAL_BY_VALUE
+        cls = classify(obj)
+        if cls == UNSUPPORTED_MUTABLE:
+            raise UnrepresentableState(path, obj)
 
-        w.nodes[wid] = WitnessNode(
-            witness_id=wid, runtime_type=type(obj).__name__,
-            canonical_value=_canonical_value(obj, policy),
-            mutable=mutable, policy=policy,
+        snap.nodes[wid] = WitnessNode(
+            witness_id=wid, runtime_type=type(obj).__name__, classification=cls,
+            canonical_value=canonical_value(obj, cls, path),
+            mutable=is_mutable(cls), tracks_identity=tracks_identity(cls),
         )
 
-        if policy != DESCEND:
+        if not descends(cls):
             continue
         if depth >= max_depth:
-            w.truncations.append(path)
+            snap.truncations.append(path)
             continue
-        for clabel, cvalue in _children(obj):
-            queue.append((f"{path}{clabel}", cvalue, depth + 1, wid, clabel))
+        for clabel, cvalue in _children(obj, cls, path):
+            queue.append((f"{path}|{clabel!r}", cvalue, depth + 1, wid, clabel))
 
-    return w
+    return snap
 
 
-def compare(before: StateWitness, after: StateWitness) -> Dict[str, Any]:
-    """Two claims, reported separately. Neither is called `pure`."""
+def compare(before: StateSnapshot, after: StateSnapshot) -> StateComparison:
     bv, av = before.value_signature(), after.value_signature()
     ba, aa = before.alias_signature(), after.alias_signature()
-    return {
-        # Named so that no one can later collapse them into `pure`. Each is
-        # scoped to PERSISTENT state observed between two captures, over the
-        # SUPPORTED subset of engine-owned state — semantic subsystems (_db,
-        # kdtree) are excluded and transient mutation is out of reach entirely.
-        "persistent_value_state_equal": bv == av,
-        "persistent_alias_topology_equal": ba == aa,
-        "value_diff_paths": sorted(
-            p for p in set(bv) | set(av) if bv.get(p) != av.get(p)
-        )[:40],
-        "alias_only_before": sorted(ba - aa)[:40],
-        "alias_only_after": sorted(aa - ba)[:40],
-        "persistent_root_identity_equal":
-            before.root_identity() == after.root_identity(),
-    }
+    return StateComparison(
+        persistent_value_state_equal=bv == av,
+        persistent_alias_topology_equal=ba == aa,
+        persistent_root_identity_equal=before.root_identity() == after.root_identity(),
+        value_diff_paths=sorted(p for p in set(bv) | set(av)
+                                if bv.get(p) != av.get(p))[:40],
+        alias_only_before=sorted(ba - aa, key=repr)[:40],
+        alias_only_after=sorted(aa - ba, key=repr)[:40],
+    )

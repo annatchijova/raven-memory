@@ -96,8 +96,8 @@ def test_cyclic_engine_owned_graph_terminates_and_keeps_the_back_edge(engine):
     ids = {n.witness_id for n in w.nodes.values()}
     assert id(a) in ids and id(b) in ids
     edges = {(p, lab, c) for p, lab, c in w.edges}
-    assert (id(a), ".peer", id(b)) in edges
-    assert (id(b), ".peer", id(a)) in edges, "the back-edge was dropped"
+    assert (id(a), ("attr", "peer"), id(b)) in edges
+    assert (id(b), ("attr", "peer"), id(a)) in edges, "the back-edge was dropped"
 
     # And the two independent claims are computable over a cyclic graph.
     assert w.value_signature()
@@ -109,7 +109,7 @@ def test_self_referential_container_terminates(engine):
     d["self"] = d
     engine.selfref = d
     w = witness(engine)
-    assert (id(d), "['self']", id(d)) in set(w.edges)
+    assert (id(d), ("key", ("str", "'self'")), id(d)) in set(w.edges)
     sig = w.value_signature()
     assert any("<cycle>" in str(v) for v in sig.values())
 

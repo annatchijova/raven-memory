@@ -1,33 +1,52 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-RAVEN-MEMORY — adversarial round on StateWitness.
+RAVEN-MEMORY — StateWitness after the identity-boundary rebuild.
 
-The instrument is NOT promotable to a purity oracle for the engine, and this
-file is the evidence for that judgement rather than a claim about it. Three
-defects are frozen here as KNOWN_DEFECT characterisations — green today,
-asserting that the flaw is present — and must be INVERTED when fixed, never
-deleted. Alongside them, the claims that DID survive the attack, so the two
-categories are never confused again.
+The adversarial round on the first version (0cf0cd1) landed three defects:
 
-Nothing is fixed here. The first defect in particular needs a decision about
-the representation of the alias graph, not a patch.
+  1. interned value atoms polluted the identity graph — attaching ONE alias
+     renamed 19 unrelated edges, because `1` inside a fresh dict IS the `1` in
+     `_active_cells`;
+  2. observation executed the observed object's code (`repr`, potentially
+     `__eq__`);
+  3. dict keys went through `repr()`, leaking heap addresses and hiding a second
+     identity graph inside the edge labels.
+
+All three were frozen there as green KNOWN_DEFECT characterisations. This file
+is their INVERSION: each now asserts the corrected semantics, and the tests that
+survived the attack unchanged are kept alongside so the two categories stay
+distinguishable.
+
+One limit is unchanged and still stated: S0 → S1 → S0 is out of reach for any
+before/after comparison.
 
 Run: pytest tests/test_state_witness_attacks.py -q
 """
 
 import copy
+import enum
 import sys
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from raven.memory_engine import AdaptiveMemoryEngine
-from state_witness import UnrepresentableState, compare, take_witness
+from raven.memory_engine import AdaptiveMemoryEngine, LinkType
+from state_witness import (
+    OWNED_MUTABLE_CONTAINER,
+    OWNED_OBJECT,
+    UnrepresentableState,
+    compare,
+    descends,
+    is_mutable,
+    take_witness,
+    tracks_identity,
+)
 from test_intervention_properties import near
 from test_state_witness import ENGINE_EXCLUSIONS
 
@@ -47,86 +66,144 @@ def witness(eng):
 
 
 # ============================================================
-# DEFECT 1 — interned value atoms pollute the identity graph
+# The contract that makes the fix a design and not a patch
 # ============================================================
 
-def test_KNOWN_DEFECT_interned_atoms_pollute_the_alias_graph(engine):
-    """Attaching ONE new alias renames unrelated edges across the whole graph.
+def test_identity_tracking_is_a_separate_concept_from_descendability():
+    """They agree on every classification that exists today except one, and the
+    immutable container is exactly the case that keeps them from being the same
+    predicate. Collapsing them would make a coincidence into architecture."""
+    assert tracks_identity(OWNED_MUTABLE_CONTAINER) and descends(OWNED_MUTABLE_CONTAINER)
+    assert tracks_identity(OWNED_OBJECT) and descends(OWNED_OBJECT)
+    assert descends("OWNED_IMMUTABLE_CONTAINER")
+    assert not tracks_identity("OWNED_IMMUTABLE_CONTAINER")
+    assert not tracks_identity("VALUE_TERMINAL")
+    assert not tracks_identity("IDENTITY_TERMINAL")
 
-    Root cause, confirmed: CPython interns small integers, so the `1` inside a
-    freshly attached dict IS the `1` inside `_active_cells` — the same object.
-    The graph therefore records "these two paths share an object" for value
-    atoms, which is not engine topology at all. Canonical-path naming then
-    turns that into a global rename: the new alias wins the canonical path for
-    the interned atoms, and every edge naming them is relabelled.
 
-    The fix is NOT a better naming scheme. Value terminals must not participate
-    in the identity graph at all.
+def test_no_engine_owned_mutable_escapes_identity_tracking(engine):
+    """The invariant that forbids an accidental third category.
 
-    INVERT when that lands: the unrelated-edge count must go to zero.
+    Every supported engine-owned mutable must either participate in identity
+    tracking, or be excluded as a semantic subsystem with its own witness. What
+    must never exist is "mutable, represented by value only, identity ignored" —
+    that is precisely the shape the blind spot had.
     """
-    shared = {"payload": [1, 2, 3]}          # small ints — interned
+    w = witness(engine)
+    offenders = [
+        (w.canonical_paths[wid], n.runtime_type, n.classification)
+        for wid, n in w.nodes.items()
+        if n.mutable and not n.tracks_identity
+    ]
+    assert not offenders, f"mutable state outside identity tracking: {offenders}"
+
+
+def test_mutable_masquerading_as_a_value_object_fails_closed(engine):
+    """__slots__ implies neither immutability nor value semantics, so it is not
+    a membership criterion for the safe-value registry. A mutable type that
+    merely looks value-like must fail closed rather than slip into the value
+    domain and vanish from the identity graph."""
+    class MutableValueLike:
+        __slots__ = ("x",)
+
+        def __init__(self):
+            self.x = 1
+
+    # Assert the CLASSIFICATION, not merely that something downstream raised.
+    # A negative control showed the object still failed closed when __slots__ was
+    # (wrongly) treated as value-semantic, because a second guard caught the
+    # missing canonicaliser. Defence in depth is welcome; a test that cannot
+    # tell which layer held is not.
+    from state_witness import UNSUPPORTED_MUTABLE, classify
+    assert classify(MutableValueLike()) == UNSUPPORTED_MUTABLE, (
+        "__slots__ became a membership criterion for the value domain"
+    )
+
+    engine.sneaky_value = MutableValueLike()
+    with pytest.raises(UnrepresentableState) as exc:
+        witness(engine)
+    assert exc.value.runtime_type == "MutableValueLike"
+
+
+# ============================================================
+# INVERSION 1 — interned atoms no longer manufacture topology
+# ============================================================
+
+def test_INVERTED_adding_an_alias_no_longer_churns_unrelated_edges(engine):
+    """Was KNOWN_DEFECT: 19 unrelated edges renamed. Value terminals are no
+    longer identity nodes, so interned atoms cannot fabricate sharing."""
+    # The property, stated without a fragile path filter: attaching an alias
+    # must not perturb the topology of state that was already there. The
+    # pristine engine's edges are the reference.
+    pristine = witness(engine).alias_signature()
+
+    shared = {"payload": [1, 2, 3]}          # small ints — still interned
     engine.zzz_long_attribute_name = shared
     before = witness(engine)
-    engine.a = shared                         # one new alias, same object
+    engine.a = shared                         # one new alias to the same object
     after = witness(engine)
 
     ba, aa = before.alias_signature(), after.alias_signature()
-
-    def unrelated(sig):
-        return {t for t in sig if "engine.a" not in t[0] and "engine.a" not in t[2]}
-
-    churn = unrelated(ba) ^ unrelated(aa)
-    assert churn, (
-        "DEFECT RESOLVED — adding an alias no longer churns unrelated edges. "
-        "Invert this test instead of deleting it."
-    )
-    # The pollution is specifically through interned atoms reachable elsewhere.
-    assert any("_active_cells" in t[0] or "_active_cells" in t[2] for t in churn), (
-        f"churn is no longer via interned atoms: {sorted(churn)[:3]}"
+    assert pristine <= ba, "attaching the object already perturbed prior state"
+    assert pristine <= aa, (
+        "aliasing perturbed pre-existing engine topology: "
+        f"{sorted(pristine - aa, key=repr)[:3]}"
     )
 
+    # RESIDUAL, stated rather than asserted away: canonical-path naming renames
+    # the aliased object's own subtree, because it genuinely acquired a shorter
+    # shortest path. So the reported delta is not minimal — every changed edge
+    # must at least NAME the aliased object. That is the sense in which this
+    # claim compares a rooted RENDERING of the topology and not the topology.
+    churn = ba ^ aa
+    assert churn, "aliasing a mutable must be visible somewhere"
+    for parent, _label, child in churn:
+        assert parent in ("engine", "engine.a", "engine.zzz_long_attribute_name") \
+            or parent.startswith(("engine.a|", "engine.zzz_long_attribute_name|")), \
+            f"churn reached unrelated state: {parent}"
+        assert child.startswith(("engine.a", "engine.zzz_long_attribute_name")), \
+            f"churn reached unrelated state: {child}"
 
-def test_interning_is_the_mechanism_not_the_naming(engine):
-    """Control that isolates the cause: the identical attack with a payload
-    holding no interned atoms churns far less. If this ever reports the same
-    magnitude as the test above, the diagnosis was wrong."""
-    def churn_for(payload):
-        eng = AdaptiveMemoryEngine(db_path=Path(tempfile.mkdtemp()) / "m.db")
-        for i in range(4):
-            eng.store(f"documento numero {i} con texto", near("c", i))
-        eng.recall(near("c", 0))
-        eng._ensure_kdtree()
-        shared = {"payload": payload}
-        eng.zzz_long_attribute_name = shared
-        b = witness(eng)
-        eng.a = shared
-        a = witness(eng)
 
-        def unrelated(sig):
-            return {t for t in sig
-                    if "engine.a" not in t[0] and "engine.a" not in t[2]}
-        return len(unrelated(b.alias_signature()) ^ unrelated(a.alias_signature()))
+@pytest.mark.parametrize("label,value", [
+    ("interned int", 7),
+    ("interned str", "shared-string-value"),
+    ("enum member", LinkType.RESONANT),
+    ("path", Path("/tmp/x")),
+    ("float", 3.5),
+])
+def test_aliasing_a_value_terminal_does_not_change_topology(engine, label, value):
+    """Sharing an int, a string, an enum member or a path says nothing about
+    engine state. Adding such an alias must move the value claim and leave the
+    topology claim untouched."""
+    engine.v1 = value
+    before = witness(engine)
+    engine.v2 = value                         # same object, second reference
+    after = witness(engine)
 
-    with_ints = churn_for([1, 2, 3])
-    without = churn_for(["no-interned-small-ints-here"])
-    assert with_ints > without, (with_ints, without)
+    result = compare(before, after)
+    assert not result["persistent_value_state_equal"], \
+        f"{label}: a new attribute is new state and must show up by value"
+    assert result["persistent_alias_topology_equal"], \
+        f"{label}: a value terminal fabricated topology"
+
+
+def test_aliasing_a_mutable_does_change_topology(engine):
+    """The other half: for a mutable, sharing IS engine topology."""
+    engine.m1 = {"k": [1]}
+    before = witness(engine)
+    engine.m2 = engine.m1
+    after = witness(engine)
+    assert not compare(before, after)["persistent_alias_topology_equal"]
 
 
 # ============================================================
-# DEFECT 2 — observation executes the observed object's code
+# INVERSION 2 — observation executes nothing the object defines
 # ============================================================
 
-def test_KNOWN_DEFECT_observation_executes_observed_object_code(engine):
-    """A purity instrument that runs arbitrary object behaviour while looking
-    at state can itself be a source of mutation.
-
-    `repr()` is called on set members and dict keys, and a comparison-driven
-    sort can reach `__eq__`. Nothing stops either from having side effects.
-
-    INVERT when observation is made behaviour-free (identity- and type-based
-    canonicalisation for non-atomic keys and members).
-    """
+def test_INVERTED_observation_executes_no_observed_object_code(engine):
+    """Was KNOWN_DEFECT: 5 `__repr__` calls. An instrument that runs arbitrary
+    behaviour while looking at state can itself mutate it."""
     calls = []
 
     class Sneaky:
@@ -137,107 +214,192 @@ def test_KNOWN_DEFECT_observation_executes_observed_object_code(engine):
             calls.append("__repr__")
             return "Sneaky()"
 
+        def __str__(self):
+            calls.append("__str__")
+            return "Sneaky()"
+
         def __eq__(self, other):
             calls.append("__eq__")
             return False
 
+        def __lt__(self, other):
+            calls.append("__lt__")
+            return False
+
+        def __hash__(self):
+            calls.append("__hash__")
+            return 1
+
+    engine.plain = Sneaky()
+    engine.in_list = [Sneaky(), Sneaky()]
+    engine.in_dict_value = {"k": Sneaky()}
+    witness(engine)
+
+    assert calls == [], f"observation executed observed code: {calls}"
+
+
+def test_observation_does_not_trigger_properties_or_descriptors(engine):
+    """`vars()` rather than `getattr`, so a property cannot fire during
+    observation — and a property that mutates would otherwise make the
+    instrument the source of the change it reports."""
+    fired = []
+
+    class WithProperty:
+        def __init__(self):
+            self._v = 1
+
+        @property
+        def computed(self):
+            fired.append("property")
+            self._v += 1                      # a property that mutates
+            return self._v
+
+    engine.prop_holder = WithProperty()
+    witness(engine)
+    assert fired == []
+    assert engine.prop_holder._v == 1, "observation mutated through a property"
+
+
+# ============================================================
+# INVERSION 3 — keys are inert tokens, addresses never leak
+# ============================================================
+
+def test_INVERTED_no_heap_address_reaches_the_signature(engine):
+    class Colour(enum.Enum):
+        RED = "red"
+
+    engine.keys_ok = {
+        "s": 1, 17: 2, b"bytes": 3, (1, "t"): 4,
+        Colour.RED: 5, Path("/tmp/k"): 6, 2.5: 7, None: 8, True: 9,
+    }
+    sig = witness(engine).value_signature()
+    leaking = [p for p, v in sig.items() if "0x" in str(v)]
+    assert leaking == [], f"heap addresses leaked at {leaking}"
+
+
+def test_INVERTED_equal_by_value_keys_compare_as_the_same_state(engine):
+    """A tuple key rebuilt with equal contents is the same state, and used to
+    read as different because its `repr` carried an address."""
+    engine.dk = {(1, "a"): "v"}
+    before = witness(engine)
+    engine.dk = {(1, "a"): "v"}
+    after = witness(engine)
+    assert compare(before, after)["persistent_value_state_equal"]
+
+
+def test_INVERTED_unsupported_dict_key_fails_closed(engine):
+    """A key outside the value domain is refused, naming the path, rather than
+    stringified into the signature. The second identity graph that used to hide
+    inside the edge labels cannot form."""
+    class KeyObj:
         def __hash__(self):
             return 1
 
-    engine.sneaky_in_set = {Sneaky()}
-    engine.sneaky_as_key = {Sneaky(): 1}
-    witness(engine)
+        def __eq__(self, other):
+            return self is other
 
-    assert calls, (
-        "DEFECT RESOLVED — observation no longer executes observed code. "
-        "Invert this test."
-    )
-    assert "__repr__" in calls
+    engine.dk = {KeyObj(): "v"}
+    with pytest.raises(UnrepresentableState) as exc:
+        witness(engine)
+    assert "dict key" in str(exc.value)
+    assert exc.value.runtime_type == "KeyObj"
 
 
-# ============================================================
-# DEFECT 3 — repr-based keys leak heap addresses
-# ============================================================
+def test_set_members_are_sorted_as_tokens_not_as_objects(engine):
+    """Sorting the objects would invoke their comparison protocol. Members are
+    canonicalised to inert tokens first, and the TOKENS are ordered."""
+    engine.s = {3, 1, 2, "a", "b"}
+    a, b = witness(engine), witness(engine)
+    assert compare(a, b)["persistent_value_state_equal"]
 
-def test_KNOWN_DEFECT_dict_keys_through_repr_leak_heap_addresses(engine):
-    """Dict keys and set members are canonicalised through `repr()`. A default
-    `__repr__` embeds the object's address, so the signature is not reproducible
-    across processes, and two equal-but-distinct keys read as different states.
+    class UnorderableMember:
+        __slots__ = ()
 
-    INVERT when keys are canonicalised through the same classification as
-    everything else, with the supported key types stated explicitly.
-    """
-    class KeyObj:
-        def __init__(self, n):
-            self.n = n
+        def __lt__(self, other):
+            raise AssertionError("the witness compared observed objects")
 
         def __hash__(self):
-            return hash(self.n)
+            return 7
 
         def __eq__(self, other):
-            return isinstance(other, KeyObj) and self.n == other.n
+            return self is other
 
-    engine.dk = {KeyObj(1): "v"}
-    sig = witness(engine).value_signature()
-    leaking = [p for p, v in sig.items() if "0x" in str(v)]
-    assert leaking, (
-        "DEFECT RESOLVED — no heap address reaches the signature. Invert this."
-    )
+    engine.s2 = {UnorderableMember()}
+    with pytest.raises(UnrepresentableState):
+        witness(engine)                        # unsupported member, not a crash
 
-    # And the consequence: equal-by-value keys are reported as different state.
+
+# ============================================================
+# Orthogonality of the two claims
+# ============================================================
+
+def test_changing_only_a_terminal_value_leaves_topology_untouched(engine):
+    """The cleanest demonstration that the two oracles are independent."""
+    engine.holder = {"n": 1}
     before = witness(engine)
-    engine.dk = {KeyObj(1): "v"}               # equal key, distinct object
+    engine.holder["n"] = 2                    # same objects, different value
     after = witness(engine)
-    assert not compare(before, after)["persistent_value_state_equal"], (
-        "equal-by-value keys now compare equal — invert this half too"
-    )
+
+    result = compare(before, after)
+    assert not result["persistent_value_state_equal"]
+    assert result["persistent_alias_topology_equal"]
+    assert result["persistent_root_identity_equal"]
 
 
-def test_KNOWN_DEFECT_key_objects_are_absent_from_the_graph(engine):
-    """A non-scalar dict key is a reachable object with its own identity, and
-    it never becomes a node. There is a second, hidden identity graph living
-    inside the edge labels.
+def test_reconstruction_preserving_values_but_destroying_sharing(engine):
+    """A deepcopy-like rebuild: every value survives, every mutable identity
+    relationship does not."""
+    inner = {"k": [1, 2]}
+    engine.r1 = inner
+    engine.r2 = inner
+    before = witness(engine)
+    rebuilt = copy.deepcopy(inner)
+    engine.r1, engine.r2 = rebuilt, copy.deepcopy(inner)
+    after = witness(engine)
 
-    INVERT when keys are walked under the same ownership classification.
-    """
-    class KeyObj:
-        def __init__(self, n):
-            self.n = n
+    result = compare(before, after)
+    assert result["persistent_value_state_equal"]
+    assert not result["persistent_alias_topology_equal"]
 
-        def __hash__(self):
-            return hash(self.n)
 
-        def __eq__(self, other):
-            return isinstance(other, KeyObj) and self.n == other.n
+def test_reconstruction_reassigning_only_equivalent_terminals(engine):
+    """The control for the test above: rebuilding only value terminals changes
+    neither claim."""
+    engine.t1 = "a-string-value"
+    engine.t2 = 12345
+    before = witness(engine)
+    engine.t1 = "a-string" + "-value"
+    engine.t2 = 12000 + 345
+    after = witness(engine)
 
-    engine.dk = {KeyObj(1): "v"}
-    w = witness(engine)
-    assert not any("KeyObj" in n.runtime_type for n in w.nodes.values()), (
-        "DEFECT RESOLVED — key objects are now nodes. Invert this."
-    )
+    result = compare(before, after)
+    assert result["persistent_value_state_equal"]
+    assert result["persistent_alias_topology_equal"]
+
+
+def test_root_identity_lives_on_the_comparator_not_the_snapshot():
+    """It is a relation between two captures of one process, not canonicalisable
+    state, so it must not be a field of the snapshot."""
+    from state_witness import StateComparison, StateSnapshot
+    assert "persistent_root_identity_equal" in StateComparison.__dataclass_fields__
+    assert "persistent_root_identity_equal" not in StateSnapshot.__dataclass_fields__
 
 
 # ============================================================
-# What SURVIVED the attack — real properties
+# Survived the first attack, still holds
 # ============================================================
 
 def test_cycle_topology_is_discriminated_with_identical_payloads(engine):
-    """`A → B → A` versus `A → B → B`, same payload on both nodes.
-
-    The earlier claim was only "it terminates and keeps the back-edge", which
-    is not discrimination. This is: values identical, topology different,
-    reported as two separate answers.
-    """
     class N:
         def __init__(self):
             self.tag = "t"
             self.peer = None
 
     a, b = N(), N()
-    a.peer, b.peer = b, a                      # A → B → A
+    a.peer, b.peer = b, a
     engine.g = a
     before = witness(engine)
-    b.peer = b                                 # A → B → B
+    b.peer = b
     after = witness(engine)
 
     result = compare(before, after)
@@ -246,23 +408,17 @@ def test_cycle_topology_is_discriminated_with_identical_payloads(engine):
 
 
 def test_alias_merge_is_detected(engine):
-    """The inverse of the split already covered: two equal independent objects
-    becoming one shared object. Easy to build a comparator that catches one
-    direction and normalises the other away."""
     engine.p = {"k": [1]}
     engine.q = {"k": [1]}
     before = witness(engine)
     engine.q = engine.p
     after = witness(engine)
-
     result = compare(before, after)
     assert result["persistent_value_state_equal"]
     assert not result["persistent_alias_topology_equal"]
 
 
 def test_alias_multiplicity_is_preserved(engine):
-    """3 → 2+1. "Shared or not" is not enough; which paths belong to which
-    equivalence class has to survive."""
     shared = {"k": [7]}
     engine.a1 = engine.b1 = engine.c1 = shared
     before = witness(engine)
@@ -272,16 +428,12 @@ def test_alias_multiplicity_is_preserved(engine):
     result = compare(before, after)
     assert result["persistent_value_state_equal"]
     assert not result["persistent_alias_topology_equal"]
-
-    ids_before = before.root_identity()
-    ids_after = after.root_identity()
-    assert ids_before["a1"] == ids_before["b1"] == ids_before["c1"]
-    assert ids_after["a1"] == ids_after["b1"] != ids_after["c1"]
+    ib, ia = before.root_identity(), after.root_identity()
+    assert ib["a1"] == ib["b1"] == ib["c1"]
+    assert ia["a1"] == ia["b1"] != ia["c1"]
 
 
 def test_witness_is_stable_under_allocation_noise(engine):
-    """Any detail accidentally derived from allocation order would surface as
-    instability when the heap moves between two captures of the same state."""
     class Plain:
         def __init__(self):
             self.v = 1
@@ -298,7 +450,6 @@ def test_witness_is_stable_under_allocation_noise(engine):
 
 
 def test_unsupported_mutable_buried_deep_still_fails(engine):
-    """Fail-closed must not be a property of the top level only."""
     class Exotic:
         __slots__ = ("payload",)
 
@@ -313,8 +464,6 @@ def test_unsupported_mutable_buried_deep_still_fails(engine):
 
 
 def test_unsupported_mutable_reachable_by_two_aliases_still_fails(engine):
-    """Reached twice, refused once — a second path must not let it slip past
-    the visited check unrepresented."""
     class Exotic:
         __slots__ = ("payload",)
 
@@ -328,15 +477,14 @@ def test_unsupported_mutable_reachable_by_two_aliases_still_fails(engine):
         witness(engine)
 
 
-def test_path_objects_are_value_semantic_by_decision(engine):
-    """`PosixPath` has __slots__, so the mutability heuristic read it as unknown
-    mutable state and the witness failed closed on something inert. That was a
-    real accidental control, and the resolution is a stated decision rather
-    than a loosened heuristic: an unknown Python TYPE is not the same thing as
-    unknown mutable STATE, and only the latter must fail."""
-    engine.some_path = Path("/tmp/whatever")
-    w = witness(engine)                        # must not raise
-    node = w.nodes[id(engine.some_path)]
-    assert node.policy == "TERMINAL_BY_VALUE"
-    assert node.mutable is False
-    assert "0x" not in str(node.canonical_value)
+def test_STILL_BLIND_transient_mutation(engine):
+    """Unchanged and still stated: no before/after comparison reaches S1."""
+    before = witness(engine)
+    victim = next(iter(engine._active_cells))
+    engine._active_cells.discard(victim)
+    engine._active_cells.add(victim)
+    after = witness(engine)
+
+    result = compare(before, after)
+    assert result["persistent_value_state_equal"]
+    assert result["persistent_alias_topology_equal"]

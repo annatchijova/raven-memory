@@ -778,3 +778,103 @@ La discriminación de ciclos recién ahora está **demostrada**. Antes el claim 
 `atacar StateWitness` (hecho) → arreglar defectos 1–3 → congelar →
 `DBWitness` → `KDTreeWitness` → witness compuesto → **recién entonces** discutir
 reemplazo de gate → `MutationJournal` aparte.
+
+---
+
+## 17. `StateWitness` reconstruido — frontera de identidad antes que representación
+
+Los tres defectos de §16 quedaron invertidos. El orden fue el que corresponde:
+frontera semántica de identidad → grafo de identidad → representación canónica.
+Estabilizar los paths canónicos primero habría sido arreglar la representación de
+un grafo con aristas espurias.
+
+### `tracks_identity` es un concepto aparte de `descends`
+
+```
+VALUE_TERMINAL              descends=False  tracks_identity=False
+IDENTITY_TERMINAL           descends=False  tracks_identity=False
+OWNED_MUTABLE_CONTAINER     descends=True   tracks_identity=True
+OWNED_IMMUTABLE_CONTAINER   descends=True   tracks_identity=False   ← los separa
+OWNED_OBJECT                descends=True   tracks_identity=True
+UNSUPPORTED_MUTABLE         → UnrepresentableState
+```
+
+El contenedor inmutable es el caso que impide que sean el mismo predicado. Sin
+él la coincidencia se habría vuelto arquitectura por accidente.
+
+**Invariante que prohíbe la tercera categoría accidental:** todo mutable
+soportado propiedad del engine o participa del identity tracking, o está
+excluido como subsistema semántico con witness propio. *"Mutable, representado
+sólo por valor, identidad ignorada"* —la forma exacta que tenía la ceguera— no
+puede existir, y hay un test que recorre todos los nodos para comprobarlo.
+
+### Observar no ejecuta nada que el objeto observado defina
+
+Ni `__repr__`, `__str__`, `__eq__`, `__lt__`, `__hash__`, ni properties ni
+descriptores: `vars()` en vez de `getattr`. El dispatch es por **tipo exacto**,
+porque una subclase de `str` o de `dict` puede sobrescribir justamente los
+protocolos que se asumirían seguros.
+
+Los miembros de un `set` se convierten primero a tokens inertes y se ordenan los
+**tokens**, nunca los objetos.
+
+### Las claves de dict son tokens, no strings
+
+```
+("str", …) ("int", …) ("bytes", …) ("tuple", (…)) ("enum", Tipo, miembro) ("path", …)
+```
+
+Una clave fuera del dominio de valor soportado **falla cerrado**. Eso mata a la
+vez el leak de `0x7f…` y el segundo grafo de identidad que vivía escondido
+dentro de las etiquetas de arista.
+
+### `SAFE_VALUE_TYPES` es un registro, no una heurística
+
+Cada entrada es una decisión con razón escrita. **`__slots__` no es criterio de
+pertenencia**: no implica inmutabilidad ni semántica de valor, y un objeto con
+`__slots__` no registrado falla cerrado.
+
+### Hallazgo del propio arreglo: las raíces no eran aristas
+
+Una metamórfica nueva (`engine.b = engine.a` sobre un mutable) reveló que
+`alias_signature()` no veía el aliasing **a nivel raíz**: las raíces estaban
+fuera del grafo. Los tests de merge y multiplicidad pasaban indirectamente, por
+los hijos — frágil. El engine es ahora un nodo y cada atributo raíz es una
+arista real.
+
+### Residual declarado, no tapado
+
+El path canónico renombra el subárbol del objeto aliaseado, porque genuinamente
+adquirió un camino más corto. El delta reportado **no es mínimo**: toda arista
+que cambia nombra al objeto aliaseado. El churn espurio desapareció —el estado
+preexistente del engine queda intacto, `pristine ⊆ after`— pero en ese sentido el
+claim sigue comparando una **renderización rooted** de la topología.
+
+### `StateSnapshot` vs `StateComparison`
+
+`root_identity` es una relación entre dos capturas del mismo proceso, no estado
+canonicalizable, así que vive en el comparador y no en el snapshot. Hay un test
+estructural que lo verifica.
+
+### Controles negativos
+
+| control | resultado |
+|---|---|
+| terminales de valor vuelven al identity graph | 8 tests rojos |
+| claves vía `repr()` otra vez | rojo |
+| ordenar objetos del set en vez de tokens | rojo |
+| `tracks_identity == descends` | rojo |
+| raíces fuera del grafo | rojo |
+| `__slots__` tratado como value-semantic | **verde — test impreciso** |
+
+El último obligó a corregir un test: el objeto con `__slots__` igual fallaba,
+pero por un **segundo** guard (canonicalizador ausente), no porque la
+clasificación lo rechazara. Defensa en profundidad es bienvenida; un test que no
+distingue qué capa aguantó, no. Ahora afirma `classify(...) ==
+UNSUPPORTED_MUTABLE` directamente.
+
+### Sigue fuera de alcance
+
+`S0 → S1 → S0`, sin cambios y sin reclamo. Y `_db` / `kdtree` siguen excluidos,
+así que esto continúa siendo un *structural witness sobre el subconjunto
+soportado*, no un witness del estado del engine. Ningún gate reemplazado.
