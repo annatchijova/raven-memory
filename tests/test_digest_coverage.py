@@ -36,7 +36,9 @@ Run: pytest tests/test_digest_coverage.py -q
 
 import collections
 import copy
+import enum
 import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -77,8 +79,27 @@ DECLARED_EXCLUSIONS = {
 # members are interned singletons; functions and types are code, not state.
 BENIGN_OPAQUE_TYPES = {
     "LinkType", "MemoryState", "EnumType", "type", "function",
-    "builtin_function_or_method", "method", "module",
+    "builtin_function_or_method", "method", "module", "staticmethod",
+    "classmethod", "property",
 }
+
+# Code is not state, so the walk STOPS here rather than enumerating whatever
+# the interpreter happens to hang off a class. Listing the types found beyond
+# this boundary is whack-a-mole across Python versions: CI caught exactly that
+# on 3.12, where `enum._generate_next_value_` is a `staticmethod` in
+# vars(EnumType) while 3.11 exposes it as a plain `function`. The boundary is
+# the same one StateWitness settled on as IDENTITY_TERMINAL.
+_CODE_LIKE = (
+    type, types.FunctionType, types.BuiltinFunctionType, types.MethodType,
+    types.ModuleType, types.WrapperDescriptorType, types.MethodWrapperType,
+    types.MethodDescriptorType, types.GetSetDescriptorType,
+    types.MemberDescriptorType, staticmethod, classmethod, property,
+)
+
+
+def is_code_like(obj) -> bool:
+    """True for things that are code or interned singletons, not engine state."""
+    return isinstance(obj, _CODE_LIKE) or isinstance(obj, enum.Enum)
 
 
 def canonicalizer_for(v) -> str:
@@ -125,7 +146,8 @@ def walk_reachable(engine, max_depth=WALK_DEPTH, fanout=WALK_FANOUT):
             "id": id(obj), "depth": depth,
             "root": path.split(".")[1].split("[")[0],
         })
-        if id(obj) in seen or depth >= max_depth:
+        if id(obj) in seen or depth >= max_depth or is_code_like(obj):
+            # Recorded as a leaf, never descended through.
             continue
         seen.add(id(obj))
         children = []
@@ -194,6 +216,28 @@ def test_no_undeclared_blind_spots(engine):
              ("_author_profiles", "deque")]
     unexpected = [o for o in offenders if list(o) not in [list(k) for k in known]]
     assert not unexpected, f"undeclared blind spots: {unexpected}"
+
+
+def test_the_inventory_never_walks_through_code(engine):
+    """Version-robustness by construction, not by enumeration.
+
+    CI failed on Python 3.12 and not 3.11 because the walk descended into
+    `LinkType.__objclass__` and out into the interpreter, where the types
+    present differ between releases. Asserting that the walk STOPS at code is
+    stable across versions; listing the types it would otherwise meet is not.
+    """
+    nodes = walk_reachable(engine)
+    assert not any("__objclass__" in n["path"] for n in nodes), \
+        "the inventory walked out of the engine and into the enum machinery"
+
+    by_path = {n["path"]: n for n in nodes}
+    for n in nodes:
+        parent = n["path"].rsplit(".", 1)[0].rsplit("[", 1)[0]
+        pnode = by_path.get(parent)
+        if pnode is not None and pnode["type"] in BENIGN_OPAQUE_TYPES:
+            assert pnode["path"] == n["path"], (
+                f"descended through code-like {pnode['type']} at {pnode['path']}"
+            )
 
 
 def test_state_hidden_beneath_opaque_nodes_is_reported(engine):
