@@ -418,8 +418,68 @@ reloj adelantado —o un salto de NTP hacia atrás— produce ranking basura **e
 silencio**, sin `degraded`, sin warning. Es exactamente el modo de falla que el
 principio de degradación honesta del repo existe para prohibir.
 
-Arreglo propuesto (una línea, no aplicado — decisión pendiente):
-`age = max(0.0, now - mem.last_activation)`.
+**Estado: arreglado** (`age = max(0.0, now - mem.last_activation)`), con
+`tests/test_recency_bounds.py` escrito **en rojo antes del fix**. Los tests
+expresan la propiedad, no los números que el código con bug producía:
+
+```
+age_efectiva            = max(0, now − last_activation)
+0 ≤ recency_bonus ≤ RECENCY_WEIGHT      para cualquier timestamp
+futuro(+1s … +50 años)  ≡ now           en contribución de recencia
+ranking                 : un timestamp futuro no compra rango
+import_field(futuro)    : fidelidad del dato + scoring acotado
+```
+
+El test de ranking deriva su tolerancia del reloj transcurrido en la propia
+corrida (`RECENCY_WEIGHT·(1−exp(−ln2·elapsed/24h))`) en vez de usar un épsilon
+elegido a mano, así que sólo admite la diferencia que el paso del tiempo
+explica. Sin el clamp reporta: *future timestamp gained 5.369e+07 of recency
+bonus; elapsed wall-clock (0.021s) explains at most 8.229e-09*.
+
+### Lo que el clamp NO hace — pendiente deliberado
+
+El clamp arregla la **integridad del ranking**. No diagnostica el skew.
+
+Si el motor observa `last_activation > now`, el resultado ya contiene evidencia
+de una anomalía temporal, y convertirla en silencio en una activación normal de
+`now` es raro en un sistema que predica degradación honesta. Lo que faltaría:
+
+```
+effective_age    = 0
+recency_bonus    = RECENCY_WEIGHT
+temporal_anomaly = FUTURE_LAST_ACTIVATION        ← no implementado
+```
+
+No se implementó ahora a propósito: toca diagnostics y probablemente schema, y
+exige decidir una tolerancia `ε` tal que `last_activation − now > ε ⇒ skew`.
+Los relojes reales tienen jitter y precisiones distintas, así que `ε` tiene que
+ser una constante **documentada y testeada**, no un número mágico descubierto
+por accidente. Eso es un commit aparte, no una extensión de este.
+
+Responsabilidades separadas, y el test lo fija: `import_field()` preserva el
+timestamp tal cual por fidelidad y portabilidad; interpretarlo de forma segura
+es trabajo del scorer.
+
+### Hallazgo A — no es un bug, es un requisito del runner
+
+El `now` por llamada (§13.A) **no se arregla todavía**. El primitive es correcto
+para el claim que hace hoy: dentro de una sonda el contrafactual está bien
+construido porque ambas ramas comparten `now`.
+
+Pero un runner que quiera comparar una *matriz* de intervenciones bajo un mismo
+estado experimental necesita algo más que un reloj inyectable — necesita
+declarar cuál es la unidad experimental:
+
+```
+ExperimentContext
+    now
+    query embedding
+    field snapshot / identity
+    …
+```
+
+Pinnear sólo `now` daría una falsa sensación de snapshot si queda cualquier otro
+estado contextual variable. Se decide al diseñar el runner, no antes.
 
 ### Lo que los controles negativos dijeron de los tests mismos
 

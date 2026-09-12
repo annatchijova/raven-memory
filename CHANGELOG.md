@@ -32,6 +32,20 @@
   silently ignored intervention would yield delta = 0, which is
   indistinguishable from the genuine finding "no causal influence".
 
+### Fixed
+- **Unbounded recency bonus under clock skew.** `recency_bonus` is
+  `RECENCY_WEIGHT · exp(−ln2 · age / 24h)`; with `last_activation` in the
+  future the age went negative and the exponential grew without bound instead
+  of decaying (+30 days scored ~5.4e7, ~+2.8 years raised `OverflowError`).
+  Age is now clamped at zero: activity in the future cannot mean more recent
+  than now, so the term's ceiling is its value at age 0. Reachable without
+  touching the database — `import_field()` preserves `last_activation`
+  verbatim, so a field exported from a machine whose clock ran ahead silently
+  produced corrupted ranking with no degraded flag. Predates the intervention
+  work (reproduced identically on 1.2.0); found by its adversarial pass.
+  Clock skew is made harmless, not yet diagnosed — see
+  docs/INTERVENTION_DESIGN.md §13.
+
 ### Compatibility
 - Audit rows without an intervention omit the key from the hashed payload
   entirely (never `null`), so every pre-v4 chain keeps verifying.

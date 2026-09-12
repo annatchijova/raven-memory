@@ -1803,7 +1803,16 @@ class AdaptiveMemoryEngine:
 
             recency_bonus = 0.0
             if mem.last_activation > 0:
-                age = now - mem.last_activation
+                # Age is clamped at zero. "Activity in the future" cannot mean
+                # "more recent than now": the most recent a memory can be is
+                # now, so the term's ceiling is its value at age = 0, i.e.
+                # RECENCY_WEIGHT. Without the clamp a negative age makes the
+                # exponential GROW without bound — a field imported from a
+                # machine whose clock ran ahead scored +30 days at ~5.4e7 and
+                # overflowed outright past ~2.8 years, all of it silent.
+                # Clock skew is not diagnosed here, only made harmless; see
+                # docs/INTERVENTION_DESIGN.md §13.
+                age = max(0.0, now - mem.last_activation)
                 recency_bonus = RECENCY_WEIGHT * math.exp(-math.log(2) * age / RECENCY_HALFLIFE)
 
             resonant_contribution = resonant_boost * min(sim, 1.0)
