@@ -597,6 +597,14 @@ antes de cambiar lo que hace.
 
 ## 15. `StateWitness` (`tests/state_witness.py`)
 
+**Alcance del claim, con precisión:** esto es un *structural witness sobre el
+subconjunto soportado de estado propiedad del engine, excluyendo subsistemas
+semánticos*. **No** es un "engine state witness". Mientras `_db` y `kdtree`
+queden afuera el gate conserva blind spots conocidos y relevantes —
+`_prev_audit_hash` entre ellos, que no es un detalle: una sonda que escribiera
+estado de auditoría y restaurara todo lo demás podría parecer persistentemente
+limpia.
+
 Instrumento sucesor de `structural_digest()`, que **no se arregla** — §14 queda
 como su autopsia. No reemplaza todavía ningún gate.
 
@@ -688,3 +696,85 @@ de la cadena de auditoría y el gate no lo viera, sería exactamente el falso
 
 Se implementan **después** de que el structural witness esté estable, y recién
 entonces se decide qué gate reemplaza a cuál.
+
+---
+
+## 16. Ronda adversarial sobre `StateWitness` (`tests/test_state_witness_attacks.py`)
+
+Veredicto: arquitectura correcta, **no promovible a oracle de pureza del
+engine**. Tres defectos confirmados, congelados como `KNOWN_DEFECT` —verdes hoy,
+afirmando que la falla está presente— para invertir cuando se arreglen. Nada
+arreglado en esta ronda.
+
+### Defecto 1 — el grafo de identidad está contaminado por átomos internados
+
+El ataque de canonical-path renaming **cayó**, y por un mecanismo más profundo
+que el naming. Agregar **un** alias nuevo a un objeto compartido renombró **19
+aristas no relacionadas**.
+
+Causa raíz, confirmada: CPython internea los enteros chicos, así que el `1`
+dentro de un dict recién adosado **es** el `1` de `_active_cells` —el mismo
+objeto—. El grafo registra "estos dos paths comparten un objeto" para átomos de
+valor, que no es topología del engine. El path canónico (más corto, desempate
+lexicográfico) convierte eso en un renombre global: el alias nuevo gana el path
+canónico de los átomos internados y toda arista que los nombre se reetiqueta.
+
+Control que aísla la causa: el mismo ataque con un payload sin enteros chicos
+produce muchísimo menos churn.
+
+**El arreglo no es un esquema de nombres mejor**: los terminales de valor no
+deben participar del grafo de identidad. Simulado —restringir el grafo a nodos
+mutables `DESCEND`— las dos caracterizaciones del defecto se invierten y las
+tres propiedades reales (discriminación de ciclos, alias merge, multiplicidad)
+**siguen verdes**. Dirección validada, no aplicada: la decisión de
+representación es previa a construir cualquier cosa encima.
+
+Hasta entonces, `persistent_alias_topology_equal` compara una **renderización
+rooted y path-labelled** de la topología, no la topología.
+
+### Defecto 2 — observar ejecuta código del objeto observado
+
+`repr()` corre sobre miembros de `set` y claves de `dict`; un sort por
+comparación puede llegar a `__eq__`. Un objeto con `__repr__` con efectos
+laterales los dispara: 5 llamadas en el experimento. Un instrumento de pureza
+que ejecuta comportamiento arbitrario mientras observa **puede ser él mismo
+fuente de mutación**.
+
+### Defecto 3 — claves por `repr()` filtran direcciones de heap
+
+`engine.dk → ('dict', ['<KeyObj object at 0x7f1f0d6790d0>'])`. Estable dentro de
+un proceso para el mismo objeto, pero no reproducible entre procesos, y dos
+claves iguales-por-valor se leen como estados distintos. Además el objeto-clave
+**nunca es un nodo**: hay un segundo grafo de identidad escondido dentro de las
+etiquetas de arista.
+
+### Lo que sobrevivió al ataque
+
+| propiedad | estado |
+|---|---|
+| ciclos topológicamente distintos con payload idéntico | **discrimina** (valor igual, topología distinta) |
+| alias merge (dos iguales independientes → compartido) | detecta |
+| multiplicidad 3 → 2+1, con clases de equivalencia preservadas | detecta |
+| estabilidad bajo allocation noise | estable |
+| mutable no soportado enterrado en profundidad | falla cerrado |
+| mutable no soportado alcanzable por dos aliases | falla cerrado |
+
+La discriminación de ciclos recién ahora está **demostrada**. Antes el claim era
+"termina y conserva la back-edge", que no es discriminación.
+
+### Decisiones tomadas en esta ronda
+
+- **Nombres de claim**: `persistent_value_state_equal`,
+  `persistent_alias_topology_equal`, `persistent_root_identity_equal`. Ninguna
+  API se llama `is_pure()`, ni antes ni después del `MutationJournal`.
+- **`PurePath` y otros value objects con `__slots__`** → terminales por valor,
+  con razón escrita. "Tipo Python desconocido" no es lo mismo que "estado
+  mutable desconocido"; sólo el segundo debe fallar cerrado. El fallo original
+  en `engine._db.db_path (PosixPath)` fue un control accidental útil, y se
+  resuelve por decisión declarada, no aflojando la heurística.
+
+### Orden pendiente
+
+`atacar StateWitness` (hecho) → arreglar defectos 1–3 → congelar →
+`DBWitness` → `KDTreeWitness` → witness compuesto → **recién entonces** discutir
+reemplazo de gate → `MutationJournal` aparte.

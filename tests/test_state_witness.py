@@ -172,7 +172,7 @@ def test_INVERTED_opaque_object_mutated_during_a_probe_is_now_seen(engine):
 
     assert engine.evil.counter > 0
     result = compare(before, after)
-    assert not result["value_state_equal"], "the witness still cannot see it"
+    assert not result["persistent_value_state_equal"], "the witness still cannot see it"
     assert any("evil" in p for p in result["value_diff_paths"])
 
 
@@ -188,7 +188,7 @@ def test_INVERTED_rolling_stylometric_window_is_now_seen(engine):
     after = witness(engine)
 
     result = compare(before, after)
-    assert not result["value_state_equal"]
+    assert not result["persistent_value_state_equal"]
     assert any("_author_profiles" in p and "avg_sentence_length" in p
                for p in result["value_diff_paths"]), result["value_diff_paths"][:5]
 
@@ -206,12 +206,12 @@ def test_INVERTED_identity_topology_change_is_now_seen(engine):
     after = witness(engine)
 
     result = compare(before, after)
-    assert result["value_state_equal"], (
+    assert result["persistent_value_state_equal"], (
         "the copy has equal value — reporting a value change here would be a "
         "false positive, and would hide what actually changed"
     )
-    assert not result["alias_topology_equal"], "identity topology change missed"
-    assert not result["root_identity_equal"]
+    assert not result["persistent_alias_topology_equal"], "identity topology change missed"
+    assert not result["persistent_root_identity_equal"]
 
 
 def test_value_claim_on_the_aliased_path_is_not_vacuous(engine):
@@ -228,8 +228,8 @@ def test_value_claim_on_the_aliased_path_is_not_vacuous(engine):
     after = witness(engine)
 
     result = compare(before, after)
-    assert not result["value_state_equal"]
-    assert not result["alias_topology_equal"]
+    assert not result["persistent_value_state_equal"]
+    assert not result["persistent_alias_topology_equal"]
 
 
 # ============================================================
@@ -251,7 +251,7 @@ def test_STILL_BLIND_transient_mutation(engine):
     after = witness(engine)
 
     result = compare(before, after)
-    assert result["value_state_equal"] and result["alias_topology_equal"], (
+    assert result["persistent_value_state_equal"] and result["persistent_alias_topology_equal"], (
         "a before/after witness somehow observed S1 — if this ever fails, the "
         "instrument is doing something other than what it claims"
     )
@@ -266,7 +266,7 @@ def test_witness_sees_a_persistent_representable_mutation(engine):
     engine._active_cells.discard(next(iter(engine._active_cells)))
     after = witness(engine)
     result = compare(before, after)
-    assert not result["value_state_equal"]
+    assert not result["persistent_value_state_equal"]
 
 
 def test_witness_is_stable_with_no_mutation(engine):
@@ -274,9 +274,9 @@ def test_witness_is_stable_with_no_mutation(engine):
     instrument rather than a fact about the engine."""
     a, b = witness(engine), witness(engine)
     result = compare(a, b)
-    assert result["value_state_equal"]
-    assert result["alias_topology_equal"]
-    assert result["root_identity_equal"]
+    assert result["persistent_value_state_equal"]
+    assert result["persistent_alias_topology_equal"]
+    assert result["persistent_root_identity_equal"]
 
 
 def test_a_probe_leaves_no_trace_under_the_new_witness(engine):
@@ -294,7 +294,7 @@ def test_a_probe_leaves_no_trace_under_the_new_witness(engine):
     after = witness(engine)
 
     result = compare(before, after)
-    assert result["value_state_equal"], result["value_diff_paths"]
-    assert result["alias_topology_equal"], (
+    assert result["persistent_value_state_equal"], result["value_diff_paths"]
+    assert result["persistent_alias_topology_equal"], (
         result["alias_only_before"], result["alias_only_after"],
     )

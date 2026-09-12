@@ -29,6 +29,26 @@ comparison can. That needs a MutationJournal instrumenting write surfaces, and
 its claim would be bounded to "no mutation through instrumented surfaces",
 never "no mutation".
 
+CONFIRMED DEFECTS (tests/test_state_witness_attacks.py), not yet fixed:
+
+  1. The alias graph is polluted by interned value atoms. `id(1)` inside a
+     freshly attached dict IS the `1` inside `_active_cells`, so the graph
+     records "sharing" that is not engine topology. Combined with canonical-path
+     naming, attaching one new alias renamed 19 UNRELATED edges. The fix is not
+     a better naming scheme: value terminals must not participate in the
+     identity graph at all.
+  2. Observation executes the observed object's code. `repr()` runs on set
+     members and dict keys, and a comparison-driven sort can run `__eq__`. A
+     purity instrument that executes arbitrary object behaviour can itself be
+     a source of mutation.
+  3. Dict keys and set members are canonicalised through `repr()`, so a default
+     `__repr__` embeds a heap address in the signature. Stable within a process
+     for the same object, but not reproducible across processes, and two
+     equal-but-distinct key objects compare as different states.
+
+Until 1 is fixed, `persistent_alias_topology_equal` compares a rooted,
+path-labelled RENDERING of the topology, not the topology.
+
 Not a pytest module — an instrument used by tests.
 """
 
@@ -72,6 +92,24 @@ TERMINAL_BY_IDENTITY = "TERMINAL_BY_IDENTITY"
 EXCLUDED = "EXCLUDED"
 
 _VALUE_ATOMS = (type(None), bool, int, float, str, bytes, complex)
+
+# Immutable value objects that happen to use __slots__, so the mutability
+# heuristic would misread them as unknown mutable state and fail closed on
+# something inert. Each entry is a DECISION, not a convenience: these carry
+# value semantics for our purpose and have no engine-owned interior.
+#   PurePath — a path is a value; its parts are derived, not mutable state.
+#   Decimal / datetime / date / time / timedelta / UUID — immutable scalars.
+# "Unknown Python type" must not be equivalent to "unknown mutable state":
+# the fail-closed requirement is about engine-owned MUTABLE state.
+import datetime as _dt
+import decimal as _dec
+import pathlib as _pl
+import uuid as _uuid
+
+_VALUE_SEMANTIC_TYPES = (
+    _pl.PurePath, _dec.Decimal, _dt.datetime, _dt.date, _dt.time,
+    _dt.timedelta, _uuid.UUID,
+)
 _IDENTITY_TYPES = (
     types.FunctionType, types.BuiltinFunctionType, types.MethodType,
     types.ModuleType, type,
@@ -160,6 +198,8 @@ def _canonical_value(obj: Any, policy: str) -> Any:
                 hashlib.sha256(np.ascontiguousarray(obj).tobytes()).hexdigest())
     if isinstance(obj, enum.Enum):
         return ("enum", type(obj).__name__, obj.name, repr(obj.value))
+    if isinstance(obj, _VALUE_SEMANTIC_TYPES):
+        return ("value-semantic", type(obj).__name__, str(obj))
     if isinstance(obj, _VALUE_ATOMS):
         return repr(obj)
     if isinstance(obj, dict):
@@ -178,6 +218,8 @@ def _canonical_value(obj: Any, policy: str) -> Any:
 
 
 def _classify(obj: Any) -> str:
+    if isinstance(obj, _VALUE_SEMANTIC_TYPES):
+        return TERMINAL_BY_VALUE
     if isinstance(obj, enum.Enum):
         return TERMINAL_BY_VALUE          # kills the __objclass__ recursion
     if isinstance(obj, _VALUE_ATOMS):
@@ -194,6 +236,8 @@ def _classify(obj: Any) -> str:
 
 
 def _is_mutable(obj: Any) -> bool:
+    if isinstance(obj, _VALUE_SEMANTIC_TYPES):
+        return False
     if isinstance(obj, (dict, list, set, bytearray, collections.deque)):
         return True
     if isinstance(obj, np.ndarray):
@@ -297,12 +341,17 @@ def compare(before: StateWitness, after: StateWitness) -> Dict[str, Any]:
     bv, av = before.value_signature(), after.value_signature()
     ba, aa = before.alias_signature(), after.alias_signature()
     return {
-        "value_state_equal": bv == av,
-        "alias_topology_equal": ba == aa,
+        # Named so that no one can later collapse them into `pure`. Each is
+        # scoped to PERSISTENT state observed between two captures, over the
+        # SUPPORTED subset of engine-owned state — semantic subsystems (_db,
+        # kdtree) are excluded and transient mutation is out of reach entirely.
+        "persistent_value_state_equal": bv == av,
+        "persistent_alias_topology_equal": ba == aa,
         "value_diff_paths": sorted(
             p for p in set(bv) | set(av) if bv.get(p) != av.get(p)
         )[:40],
         "alias_only_before": sorted(ba - aa)[:40],
         "alias_only_after": sorted(aa - ba)[:40],
-        "root_identity_equal": before.root_identity() == after.root_identity(),
+        "persistent_root_identity_equal":
+            before.root_identity() == after.root_identity(),
     }
