@@ -11,6 +11,10 @@ License: Apache 2.0
 
 from .memory_engine import (
     AdaptiveMemoryEngine,
+    ExclusionReason,
+    InterventionError,
+    InterventionResult,
+    InterventionSpec,
     LinkType,
     MemoryEntry,
     MemoryState,
@@ -30,6 +34,10 @@ __version__ = "1.2.0"
 __all__ = [
     "AdaptiveMemoryEngine",
     "EmbeddingProvider",
+    "ExclusionReason",
+    "InterventionError",
+    "InterventionResult",
+    "InterventionSpec",
     "LinkType",
     "MemoryAgentOrchestrator",
     "MemoryEntry",

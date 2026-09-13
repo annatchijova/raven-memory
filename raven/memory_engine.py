@@ -30,7 +30,7 @@ import math
 import logging
 from collections import deque
 from dataclasses import dataclass, field, asdict
-from typing import Deque, List, Dict, Tuple, Optional, Set
+from typing import Deque, List, Dict, Tuple, Optional, Set, FrozenSet
 from enum import Enum
 from pathlib import Path
 
@@ -209,6 +209,8 @@ class AuditLog:
     audit_hash: str
     prev_hash: str
     qemb_sha256: Optional[str] = None
+    # v4 — present only on "recall_intervention" rows (causal probes).
+    intervention: Optional[Dict] = None
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -226,6 +228,197 @@ class ForensicAlert:
 
 
 # ============================================================
+# CAUSAL INTERVENTION — types
+# ============================================================
+
+class InterventionError(ValueError):
+    """
+    An intervention could not be applied exactly as specified.
+
+    Raised rather than degraded on purpose. A silently ignored intervention
+    yields baseline == perturbed, i.e. delta = 0 — which is indistinguishable
+    from the genuine finding "this memory has no causal influence". A new
+    client talking to an old engine would then produce false evidence instead
+    of an error, so unsupported modes fail closed
+    (docs/INTERVENTION_DESIGN.md §2).
+    """
+
+
+class ExclusionReason:
+    """Why a memory is absent from a result set. Mechanisms, not a boolean."""
+    DIRECT_SUPPRESSION = "DIRECT_SUPPRESSION"  # silenced by the intervention itself
+    INHIBITED          = "INHIBITED"           # an INHIBITORY link silenced it
+    UNREACHABLE        = "UNREACHABLE"         # BFS never arrived
+    STATE_FILTER       = "STATE_FILTER"        # FORGOTTEN
+    LAYER_FILTER       = "LAYER_FILTER"        # layer_filter excluded it
+    STYLOMETRY         = "STYLOMETRY"          # quarantined under RAVEN_STYLO_ENFORCE
+    BELOW_TOP_K        = "BELOW_TOP_K"         # scored, but outranked
+    NOT_IN_FIELD       = "NOT_IN_FIELD"        # unknown, or not a live cell
+
+
+INTERVENTION_MODES = ("suppress",)
+# "readout" is named in the design but deliberately NOT implemented in v1:
+# suppressing at readout answers a different question (direct contribution)
+# than suppressing in the field (structural influence), and conflating the two
+# produces a delta that means nothing. See docs/INTERVENTION_DESIGN.md §3.
+INTERVENTION_STAGES = ("field",)
+_INTERVENTION_STAGES_RESERVED = ("readout",)
+
+
+@dataclass(frozen=True)
+class InterventionSpec:
+    """
+    A causal probe over one recall. Closed by construction: unknown modes,
+    stages or keys are rejected, never ignored.
+    """
+    mode: str
+    targets: Tuple[str, ...]
+    stage: str = "field"
+
+    def __post_init__(self):
+        if self.mode not in INTERVENTION_MODES:
+            if self.mode in ("excite", "stimulate", "boost"):
+                raise InterventionError(
+                    f"intervention mode {self.mode!r} is reserved but not implemented: "
+                    "excitatory modes require plasticity authority that a read-only "
+                    "probe does not have (docs/INTERVENTION_DESIGN.md §4)"
+                )
+            raise InterventionError(
+                f"unknown intervention mode {self.mode!r}; supported: {list(INTERVENTION_MODES)}"
+            )
+        if self.stage in _INTERVENTION_STAGES_RESERVED:
+            raise InterventionError(
+                f"intervention stage {self.stage!r} is specified but not implemented in v1; "
+                f"supported: {list(INTERVENTION_STAGES)}"
+            )
+        if self.stage not in INTERVENTION_STAGES:
+            raise InterventionError(
+                f"unknown intervention stage {self.stage!r}; supported: {list(INTERVENTION_STAGES)}"
+            )
+        if not isinstance(self.targets, tuple):
+            raise InterventionError("targets must be a tuple of memory_id strings")
+        if any(not isinstance(t, str) for t in self.targets):
+            raise InterventionError("every target must be a memory_id string")
+        if len(set(self.targets)) != len(self.targets):
+            raise InterventionError("duplicate targets — the treatment population is ambiguous")
+        # NOTE (red-team finding RT-2, reviewed): an EMPTY targets tuple is
+        # deliberately allowed — it is the null probe. The witness tests use
+        # InterventionSpec.suppress([]) exactly so ("a probe leaves no trace"
+        # needs a treatment guaranteed to do nothing). The cost is a sealed
+        # no-op audit row; the row is honest about what happened, and a null
+        # row is distinguishable by its empty resolved-targets payload.
+
+    @classmethod
+    def suppress(cls, targets, stage: str = "field") -> "InterventionSpec":
+        return cls(mode="suppress", targets=tuple(targets), stage=stage)
+
+    @classmethod
+    def from_dict(cls, d: Dict) -> "InterventionSpec":
+        if not isinstance(d, dict):
+            raise InterventionError("intervention must be an object")
+        allowed = {"mode", "targets", "stage"}
+        unknown = set(d) - allowed
+        if unknown:
+            raise InterventionError(
+                f"unknown intervention field(s): {sorted(unknown)}. Refusing rather "
+                "than ignoring them — an ignored field yields delta=0, which reads "
+                "as a real negative result"
+            )
+        if "mode" not in d or "targets" not in d:
+            raise InterventionError("intervention requires 'mode' and 'targets'")
+        targets = d["targets"]
+        if not isinstance(targets, (list, tuple)):
+            raise InterventionError("targets must be a list of memory_id strings")
+        return cls(mode=d["mode"], targets=tuple(targets), stage=d.get("stage", "field"))
+
+    def to_dict(self) -> Dict:
+        return {"mode": self.mode, "targets": list(self.targets), "stage": self.stage}
+
+
+@dataclass
+class _CoreOutcome:
+    """Everything one pass of the scoring core produced — plus what it refused
+    to persist. Nothing here has touched the database."""
+    top: List["RecallResult"]
+    scored: List["RecallResult"]
+    activated_cells: Set[int]
+    inhibited_cells: Set[int]
+    query_cell: Optional[int]
+    total_candidates: int
+    f_state: int
+    f_estilo: int
+    f_inhib: int
+    synaptic_count: int
+    exclusions: Dict[str, str]
+    pending_alerts: List["ForensicAlert"]
+    enforce_forget: List[Tuple[str, int]]
+    stylo_notices: List[Tuple[str, float]]
+
+
+@dataclass
+class InterventionResult:
+    spec: InterventionSpec
+    resolved_targets: List[Tuple[str, int]]
+    baseline: List["RecallResult"]
+    perturbed: List["RecallResult"]
+    baseline_scored: List["RecallResult"]
+    perturbed_scored: List["RecallResult"]
+    delta: Dict
+    baseline_exclusions: Dict[str, str]
+    perturbed_exclusions: Dict[str, str]
+    audit: "AuditLog"
+
+    @property
+    def changed(self) -> bool:
+        d = self.delta
+        return bool(
+            d["top_k"]["disappeared"] or d["top_k"]["appeared"]
+            or d["rank_displacement"] or d["disappeared_from_field"]
+        )
+
+
+def _compute_delta(baseline: "_CoreOutcome", perturbed: "_CoreOutcome", top_k: int) -> Dict:
+    """
+    Retrieval causal influence, reported DECOMPOSED — never collapsed to one
+    scalar (docs/INTERVENTION_DESIGN.md §7).
+
+    Ranks are taken over the FULL scored candidate set, not over two truncated
+    top-k lists: at the truncation boundary a memory "appearing" from rank k+1
+    is not the same finding as a memory falling out of rank 1, and comparing
+    truncated lists silently conflates them.
+    """
+    b_rank = {r.memory.memory_id: i for i, r in enumerate(baseline.scored)}
+    p_rank = {r.memory.memory_id: i for i, r in enumerate(perturbed.scored)}
+    b_score = {r.memory.memory_id: r.final_score for r in baseline.scored}
+    p_score = {r.memory.memory_id: r.final_score for r in perturbed.scored}
+
+    common = sorted(set(b_rank) & set(p_rank))
+    rank_displacement = sum(abs(b_rank[m] - p_rank[m]) for m in common)
+    score_delta = {
+        m: round(p_score[m] - b_score[m], 6)
+        for m in common
+        if round(p_score[m] - b_score[m], 6) != 0.0
+    }
+
+    b_top = [r.memory.memory_id for r in baseline.top]
+    p_top = [r.memory.memory_id for r in perturbed.top]
+
+    return {
+        "top_k": {
+            "k": top_k,
+            "baseline": b_top,
+            "perturbed": p_top,
+            "disappeared": [m for m in b_top if m not in p_top],
+            "appeared": [m for m in p_top if m not in b_top],
+        },
+        "disappeared_from_field": sorted(set(b_rank) - set(p_rank)),
+        "appeared_in_field": sorted(set(p_rank) - set(b_rank)),
+        "rank_displacement": rank_displacement,
+        "score_delta": score_delta,
+    }
+
+
+# ============================================================
 # AUDIT HASH — canonical, verifiable, content-aware
 # ============================================================
 
@@ -238,6 +431,7 @@ def compute_audit_hash(
     prev_hash: str,
     query_embedding=None,
     qemb_hash: Optional[str] = None,
+    intervention: Optional[Dict] = None,
 ) -> str:
     """
     Canonical audit hash for the tamper-evident chain.
@@ -264,15 +458,22 @@ def compute_audit_hash(
         qemb_hash = hashlib.sha256(
             str(query_embedding).encode("utf-8") if query_embedding is not None else b""
         ).hexdigest()
+    payload_obj = {
+        "ts": round(float(timestamp), 6),
+        "op": operation,
+        "query": query_text,
+        "cells": cells_activated,
+        "results": memories_retrieved,
+        "qemb_sha256": qemb_hash,
+    }
+    # Plan INTERVENTION (schema v4): a causal probe seals its resolved spec and
+    # both branches' outcome. The key is OMITTED — not serialized as null —
+    # when absent, so an ordinary recall row produces a payload byte-identical
+    # to the pre-v4 scheme and every historical chain keeps verifying.
+    if intervention is not None:
+        payload_obj["intervention"] = intervention
     payload = json.dumps(
-        {
-            "ts": round(float(timestamp), 6),
-            "op": operation,
-            "query": query_text,
-            "cells": cells_activated,
-            "results": memories_retrieved,
-            "qemb_sha256": qemb_hash,
-        },
+        payload_obj,
         sort_keys=True,
         ensure_ascii=False,
         separators=(",", ":"),
@@ -315,9 +516,14 @@ def verify_audit_chain(entries_desc: List[Dict]) -> Dict:
             # v3 rows carry the hash in its own column (raw vector dropped);
             # legacy rows re-derive it from the stored vector.
             qemb_hash = e.get("qemb_sha256") if not qemb_stored else None
+            # v4: absent column (pre-v4 rows) and SQL NULL both mean "no
+            # intervention", which reproduces the pre-v4 payload exactly.
+            interv_stored = e.get("intervention")
+            interv = json.loads(interv_stored) if interv_stored else None
             recomputed = compute_audit_hash(
                 e["timestamp"], e["operation"], e["query_text"],
                 cells, results, e["prev_hash"], qemb, qemb_hash=qemb_hash,
+                intervention=interv,
             )
             if recomputed != e["audit_hash"]:
                 integrity_ok = False
@@ -493,7 +699,7 @@ class AuthorStyleProfile:
 # Pre-versioning v1.0/v1.1 databases report user_version=0; every migration
 # block is idempotent (IF NOT EXISTS / tolerated ALTER), so they upgrade in
 # place without a separate tool.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class MemoryStore:
@@ -620,6 +826,17 @@ class MemoryStore:
                 # populated and still verify via recomputation.
                 try:
                     conn.execute("ALTER TABLE audit_log ADD COLUMN qemb_sha256 TEXT")
+                except sqlite3.OperationalError:
+                    pass
+
+            if version < 4:
+                # ---- v4: causal-probe interventions are sealed into the chain,
+                # so the resolved spec must live in a persisted column —
+                # verify_audit_chain() recomputes from stored columns alone.
+                # NULL on every pre-existing row, which reproduces the v3
+                # payload byte-for-byte (see compute_audit_hash).
+                try:
+                    conn.execute("ALTER TABLE audit_log ADD COLUMN intervention TEXT")
                 except sqlite3.OperationalError:
                     pass
 
@@ -946,8 +1163,8 @@ class MemoryStore:
                 (timestamp, operation, query_text, query_embedding, cells_activated,
                  memories_retrieved, total_candidates, filtered_by_state,
                  filtered_by_estilometria, filtered_by_inhibitory, synaptic_activated,
-                 returned_to_agent, audit_hash, prev_hash, qemb_sha256)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 returned_to_agent, audit_hash, prev_hash, qemb_sha256, intervention)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     audit.timestamp, audit.operation, audit.query_text,
                     json.dumps(audit.query_embedding) if audit.query_embedding else None,
@@ -957,6 +1174,8 @@ class MemoryStore:
                     audit.filtered_by_estilometria, audit.filtered_by_inhibitory,
                     audit.synaptic_activated, audit.returned_to_agent,
                     audit.audit_hash, audit.prev_hash, audit.qemb_sha256,
+                    json.dumps(audit.intervention, sort_keys=True, ensure_ascii=False,
+                               separators=(",", ":")) if audit.intervention else None,
                 ),
             )
             conn.commit()
@@ -1380,6 +1599,333 @@ class AdaptiveMemoryEngine:
     # RECALL
     # ----------------------------------------------------------
 
+    # ----------------------------------------------------------
+    # RECALL — pure core + effectful wrapper
+    # ----------------------------------------------------------
+
+    def _empty_outcome(self) -> "_CoreOutcome":
+        return _CoreOutcome(
+            top=[], scored=[], activated_cells=set(), inhibited_cells=set(),
+            query_cell=None, total_candidates=0, f_state=0, f_estilo=0,
+            f_inhib=0, synaptic_count=0, exclusions={}, pending_alerts=[],
+            enforce_forget=[], stylo_notices=[],
+        )
+
+    def _recall_core(
+        self,
+        query_embedding: np.ndarray,
+        *,
+        now: float,
+        top_k: int = 5,
+        hops: int = 2,
+        layer_filter: Optional[str] = None,
+        current_turn_memories: Optional[List[str]] = None,
+        suppressed: FrozenSet[int] = frozenset(),
+    ) -> "_CoreOutcome":
+        """
+        The scoring core: seed → BFS propagation → rescue → score → rank.
+
+        PURE with respect to persistent state. It performs NO writes: no STDP,
+        no activation timestamps, no state transitions, no alert rows, no audit
+        entry, and no mutation of the engine's in-memory indices. Everything a
+        real recall would persist comes back as *pending* work for the caller
+        to apply — which is what lets a causal probe run this exact code path
+        and then throw the effects away (docs/INTERVENTION_DESIGN.md §4).
+
+        `suppressed` holds cell_ids silenced for this evaluation, stage="field":
+        a suppressed cell cannot seed the search, cannot relay activation to its
+        neighbours, cannot fire its links, and cannot be ranked. Callers must
+        have called _ensure_kdtree() already — the core never rebuilds the index,
+        so both branches of a probe observe the identical field snapshot.
+        """
+        if self.kdtree is None or not self._active_cells:
+            return self._empty_outcome()
+
+        n_indexed = len(self._kdtree_idx_to_cell)
+        if n_indexed == 0 or not (self._active_cells - suppressed):
+            # Every live cell is silenced: there is no field left to enter.
+            return self._empty_outcome()
+
+        # ---- Find seed cell (nearest non-suppressed active cell) ----
+        if suppressed:
+            # k = |suppressed| + 1 guarantees by pigeonhole that at least one
+            # returned neighbour is not silenced.
+            k = min(n_indexed, len(suppressed) + 1)
+            _, idxs = self.kdtree.query(query_embedding.reshape(1, -1), k=k)
+            idx_row = np.atleast_1d(np.asarray(idxs)[0] if np.asarray(idxs).ndim > 1
+                                    else np.asarray(idxs))
+            query_cell = None
+            for raw in idx_row:
+                i = int(raw)
+                # scipy pads with i == n and inf distance when k > n_points.
+                if i >= n_indexed:
+                    continue
+                cand = self._kdtree_idx_to_cell[i]
+                if cand not in suppressed:
+                    query_cell = cand
+                    break
+            if query_cell is None:
+                return self._empty_outcome()
+        else:
+            _, idx = self.kdtree.query(query_embedding.reshape(1, -1))
+            query_cell = self._kdtree_idx_to_cell[int(idx[0])]
+
+        all_cell_links: Dict[int, List[Tuple[int, LinkType]]] = self._cell_links_index
+
+        # ---- BFS hop expansion with ternary links ----
+        activated_cells: Set[int] = set()
+        inhibited_cells: Set[int] = set()
+        resonant_boosts: Dict[int, float] = {}
+        cell_hops: Dict[int, int] = {query_cell: 0}
+        frontier = {query_cell}
+
+        for hop_idx in range(hops + 1):
+            new_frontier: Set[int] = set()
+            for cell in frontier:
+                if cell in inhibited_cells or cell in suppressed:
+                    continue
+                activated_cells.add(cell)
+
+                for neighbor in self.cell_neighbors.get(cell, set()):
+                    if neighbor in suppressed:
+                        continue
+                    new_frontier.add(neighbor)
+                    if neighbor not in cell_hops:
+                        cell_hops[neighbor] = hop_idx + 1
+
+                for target_id, link_type in all_cell_links.get(cell, []):
+                    # A silenced cell neither relays nor inhibits: its links are
+                    # skipped above (the `continue` on entry), and links POINTING
+                    # at it are inert because the target is out of the field.
+                    if target_id in suppressed:
+                        continue
+                    if link_type == LinkType.INHIBITORY:
+                        inhibited_cells.add(target_id)
+                    elif link_type == LinkType.RESONANT:
+                        new_frontier.add(target_id)
+                        resonant_boosts[target_id] = resonant_boosts.get(target_id, 0) + RESONANT_BOOST
+                        if target_id not in cell_hops:
+                            cell_hops[target_id] = hop_idx + 1
+                    else:
+                        new_frontier.add(target_id)
+                        if target_id not in cell_hops:
+                            cell_hops[target_id] = hop_idx + 1
+
+            frontier = new_frontier - activated_cells - inhibited_cells - suppressed
+
+        exclusions: Dict[str, str] = {}
+
+        # ---- Rescue REINFORCED cells that got inhibited during BFS ----
+        # A validated truth cannot be silenced by an unverified claim.
+        if inhibited_cells:
+            candidate_mems = self._db.load_memories(cell_ids=list(inhibited_cells))
+            for _m in candidate_mems:
+                if _m.state == MemoryState.REINFORCED:
+                    inhibited_cells.discard(_m.cell_id)
+                    activated_cells.add(_m.cell_id)
+                else:
+                    # Provenance for the invariant fuzzer: "left out because a
+                    # link inhibited it" must be distinguishable from "left out
+                    # because nothing reached it" (docs/INTERVENTION_DESIGN.md §9).
+                    exclusions[_m.memory_id] = ExclusionReason.INHIBITED
+
+        # Silenced cells are named explicitly so a probe can tell a direct hit
+        # apart from a downstream effect.
+        if suppressed:
+            for _m in self._db.load_memories(cell_ids=list(suppressed)):
+                exclusions[_m.memory_id] = ExclusionReason.DIRECT_SUPPRESSION
+
+        # ---- Load and score candidates ----
+        memories = self._db.load_memories(cell_ids=list(activated_cells))
+        if layer_filter:
+            kept = []
+            for m in memories:
+                if m.layer == layer_filter:
+                    kept.append(m)
+                else:
+                    exclusions[m.memory_id] = ExclusionReason.LAYER_FILTER
+            memories = kept
+
+        total_cands = len(memories)
+        f_state = f_estilo = f_inhib = 0
+        results: List[RecallResult] = []
+        pending_alerts: List[ForensicAlert] = []
+        enforce_forget: List[Tuple[str, int]] = []
+        stylo_notices: List[Tuple[str, float]] = []
+
+        for mem in memories:
+            if mem.state == MemoryState.FORGOTTEN:
+                f_state += 1
+                exclusions[mem.memory_id] = ExclusionReason.STATE_FILTER
+                continue
+
+            if mem.cell_id in inhibited_cells and mem.cell_id != query_cell:
+                f_inhib += 1
+                exclusions[mem.memory_id] = ExclusionReason.INHIBITED
+                continue
+
+            # Stylometric forensic check (only meaningful for texts of ≥15 words).
+            # The comparison itself is a pure function of stored data, so it runs
+            # identically here for a probe; only PERSISTING its consequences
+            # (the alert row, the quarantine) is deferred to the caller.
+            if mem.fingerprint and len(mem.content.split()) >= 15:
+                lang = getattr(mem.fingerprint, "language", "und")
+                profile = self._author_profiles.get((mem.author_id, lang))
+                if profile is not None and profile.count >= STYLO_MIN_SAMPLES:
+                    dist = self.stylometric.compare(mem.fingerprint, profile.mean_fingerprint())
+                    if dist > ESTILOMETRIA_THRESHOLD:
+                        action = "DEGRADED_TO_FORGOTTEN" if STYLO_ENFORCE else "ALERT_ONLY"
+                        if mem.memory_id not in self._alerted_memories:
+                            pending_alerts.append(ForensicAlert(
+                                alert_id=f"alert_{int(now*1000)}_{mem.memory_id[:8]}",
+                                timestamp=now,
+                                memory_id=mem.memory_id,
+                                detected_author="UNKNOWN_TAMPERER",
+                                expected_author=mem.author_id,
+                                mismatch_score=dist,
+                                action_taken=action,
+                            ))
+                        if STYLO_ENFORCE:
+                            enforce_forget.append((mem.memory_id, mem.cell_id))
+                            f_estilo += 1
+                            exclusions[mem.memory_id] = ExclusionReason.STYLOMETRY
+                            continue
+                        stylo_notices.append((mem.memory_id, dist))
+
+            # Score components
+            sim = float(self._cosine_sim(query_embedding, mem.embedding))
+            state_boost = mem.state.value
+            hop_dist = cell_hops.get(mem.cell_id)
+            if hop_dist is None:
+                hop_dist = self._hop_distance(query_cell, mem.cell_id)
+            hop_decay = math.exp(-HOP_LAMBDA * hop_dist) if hop_dist >= 0 else 1.0
+            resonant_boost = resonant_boosts.get(mem.cell_id, 0.0)
+
+            synaptic_boost = 0.0
+            if current_turn_memories:
+                for act_id in current_turn_memories:
+                    if act_id in mem.synaptic_links:
+                        synaptic_boost += mem.synaptic_links[act_id]
+
+            recency_bonus = 0.0
+            if mem.last_activation > 0:
+                # Age is clamped at zero. "Activity in the future" cannot mean
+                # "more recent than now": the most recent a memory can be is
+                # now, so the term's ceiling is its value at age = 0, i.e.
+                # RECENCY_WEIGHT. Without the clamp a negative age makes the
+                # exponential GROW without bound — a field imported from a
+                # machine whose clock ran ahead scored +30 days at ~5.4e7 and
+                # overflowed outright past ~2.8 years, all of it silent.
+                # Clock skew is not diagnosed here, only made harmless; see
+                # docs/INTERVENTION_DESIGN.md §13.
+                age = max(0.0, now - mem.last_activation)
+                recency_bonus = RECENCY_WEIGHT * math.exp(-math.log(2) * age / RECENCY_HALFLIFE)
+
+            resonant_contribution = resonant_boost * min(sim, 1.0)
+            final_score = (
+                sim * state_boost * hop_decay
+                + resonant_contribution
+                + synaptic_boost * SYNAPTIC_SCORE_WEIGHT
+                + recency_bonus
+            )
+            final_score = max(0.0, final_score)
+
+            # ---- Spectral resonance + coherence (epistemic metadata) ----
+            spectral_res = 0.0
+            coherence = 1.0
+            if self._spectral is not None and self._spectral.is_built:
+                try:
+                    spectral_res = self._spectral.resonance(query_embedding, mem.embedding)
+                    mem_links = all_cell_links.get(mem.cell_id, [])
+                    r_links = sum(1 for _, lt in mem_links if lt == LinkType.RESONANT)
+                    i_links = sum(1 for _, lt in mem_links if lt == LinkType.INHIBITORY)
+                    coherence = SpectralField.coherence(r_links, i_links)
+                except Exception:
+                    pass  # spectral is optional — never crash recall()
+
+            results.append(RecallResult(
+                memory=mem, base_score=sim, state_boost=state_boost,
+                hop_decay=hop_decay, synaptic_boost=synaptic_boost,
+                recency_bonus=recency_bonus, final_score=final_score,
+                hop_distance=hop_dist, cell_id=mem.cell_id, source="similarity",
+                resonance_score=round(spectral_res, 4),
+                coherence_score=round(coherence, 4),
+            ))
+
+        # ---- Synaptic pull (STDP-driven cross-turn association) ----
+        synaptic_count = 0
+        if current_turn_memories:
+            existing_ids = {r.memory.memory_id for r in results}
+            act_mems_batch = {
+                m.memory_id: m
+                for m in self._db.load_memories_by_ids(current_turn_memories)
+            }
+            link_candidates: Dict[str, float] = {}
+            for act_id in current_turn_memories:
+                act_mem = act_mems_batch.get(act_id)
+                if not act_mem:
+                    continue
+                for linked_id, weight in act_mem.synaptic_links.items():
+                    if weight >= 0.5 and linked_id not in existing_ids:
+                        link_candidates[linked_id] = max(
+                            link_candidates.get(linked_id, 0.0), weight
+                        )
+
+            if link_candidates:
+                linked_batch = {
+                    m.memory_id: m
+                    for m in self._db.load_memories_by_ids(list(link_candidates.keys()))
+                }
+                for linked_id, weight in link_candidates.items():
+                    linked = linked_batch.get(linked_id)
+                    if not linked or linked.state == MemoryState.FORGOTTEN:
+                        continue
+                    if linked.cell_id in inhibited_cells:
+                        continue
+                    # Synaptic pull bypasses the BFS entirely, so it is the one
+                    # path a silenced cell could sneak back in through.
+                    if linked.cell_id in suppressed:
+                        continue
+                    results.append(RecallResult(
+                        memory=linked, base_score=0.0, state_boost=linked.state.value,
+                        hop_decay=1.0, synaptic_boost=weight, recency_bonus=0.0,
+                        final_score=weight * SYNAPTIC_SCORE_WEIGHT, hop_distance=-1,
+                        cell_id=linked.cell_id, source="synaptic",
+                    ))
+                    existing_ids.add(linked_id)
+                    synaptic_count += 1
+
+        # Deterministic total order. Sorting on final_score alone left ties to
+        # insertion order, which is stable on the ORDER BY cell_id path but NOT
+        # on the >999-cell chunked load — where chunk boundaries shift as soon as
+        # the active cell set changes. A probe changes that set by construction, so
+        # without an explicit tiebreak a rank delta could be a sorting artifact
+        # rather than a causal effect (docs/INTERVENTION_DESIGN.md §5).
+        results.sort(key=lambda r: (-r.final_score, r.memory.memory_id))
+        top_results = results[:top_k]
+
+        top_ids = {r.memory.memory_id for r in top_results}
+        for r in results:
+            if r.memory.memory_id not in top_ids:
+                exclusions[r.memory.memory_id] = ExclusionReason.BELOW_TOP_K
+
+        return _CoreOutcome(
+            top=top_results,
+            scored=results,
+            activated_cells=activated_cells,
+            inhibited_cells=inhibited_cells,
+            query_cell=query_cell,
+            total_candidates=total_cands,
+            f_state=f_state,
+            f_estilo=f_estilo,
+            f_inhib=f_inhib,
+            synaptic_count=synaptic_count,
+            exclusions=exclusions,
+            pending_alerts=pending_alerts,
+            enforce_forget=enforce_forget,
+            stylo_notices=stylo_notices,
+        )
+
     @_synchronized
     def recall(
         self,
@@ -1404,251 +1950,179 @@ class AdaptiveMemoryEngine:
             self._db.store_audit(audit)
             return [], audit
 
-        # ---- Find seed cell (nearest neighbour) ----
-        # KDTree is built over active cells only; idx is an array position.
-        _, idx = self.kdtree.query(query_embedding.reshape(1, -1))
-        query_cell = self._kdtree_idx_to_cell[int(idx[0])]  # array pos → cell_id
-
-        # P1 (plan 2.2): cell links come from the in-memory index maintained
-        # alongside the DB — the old load_all_cell_links_indexed() re-read the
-        # ENTIRE cell_links table on every recall, O(total links) per query.
-        all_cell_links: Dict[int, List[Tuple[int, LinkType]]] = self._cell_links_index
-
-        # ---- BFS hop expansion with ternary links ----
-        # P1 (plan 2.1): record each cell's discovery hop during the expansion.
-        # BFS discovery order IS the shortest propagation distance, so the old
-        # per-candidate _hop_distance() re-BFS (O(candidates × graph) per
-        # recall) is redundant on this path.
-        activated_cells: Set[int] = set()
-        inhibited_cells: Set[int] = set()
-        resonant_boosts: Dict[int, float] = {}
-        cell_hops: Dict[int, int] = {query_cell: 0}
-        frontier = {query_cell}
-
-        for hop_idx in range(hops + 1):
-            new_frontier: Set[int] = set()
-            for cell in frontier:
-                if cell in inhibited_cells:
-                    continue
-                activated_cells.add(cell)
-
-                for neighbor in self.cell_neighbors.get(cell, set()):
-                    new_frontier.add(neighbor)
-                    if neighbor not in cell_hops:
-                        cell_hops[neighbor] = hop_idx + 1
-
-                for target_id, link_type in all_cell_links.get(cell, []):
-                    if link_type == LinkType.INHIBITORY:
-                        inhibited_cells.add(target_id)
-                    elif link_type == LinkType.RESONANT:
-                        new_frontier.add(target_id)
-                        resonant_boosts[target_id] = resonant_boosts.get(target_id, 0) + RESONANT_BOOST
-                        if target_id not in cell_hops:
-                            cell_hops[target_id] = hop_idx + 1
-                    else:
-                        new_frontier.add(target_id)
-                        if target_id not in cell_hops:
-                            cell_hops[target_id] = hop_idx + 1
-
-            frontier = new_frontier - activated_cells - inhibited_cells
-
-        # ---- Rescue REINFORCED cells that got inhibited during BFS ----
-        # A validated truth cannot be silenced by an unverified claim:
-        # if any inhibited cell holds a REINFORCED memory, restore it.
-        if inhibited_cells:
-            candidate_mems = self._db.load_memories(cell_ids=list(inhibited_cells))
-            for _m in candidate_mems:
-                if _m.state == MemoryState.REINFORCED:
-                    inhibited_cells.discard(_m.cell_id)
-                    activated_cells.add(_m.cell_id)
-
-        # ---- Load and score candidates ----
-        memories = self._db.load_memories(cell_ids=list(activated_cells))
-        if layer_filter:
-            memories = [m for m in memories if m.layer == layer_filter]
-
-        total_cands = len(memories)
-        f_state = f_estilo = f_inhib = 0
-        results: List[RecallResult] = []
         now = time.time()
+        outcome = self._recall_core(
+            query_embedding, now=now, top_k=top_k, hops=hops,
+            layer_filter=layer_filter, current_turn_memories=current_turn_memories,
+        )
 
-        for mem in memories:
-            if mem.state == MemoryState.FORGOTTEN:
-                f_state += 1
-                continue
+        # ---- Effects: everything the pure core deferred ----
+        for alert in outcome.pending_alerts:
+            self._db.store_alert(alert)
+            self._alerted_memories.add(alert.memory_id)
 
-            if mem.cell_id in inhibited_cells and mem.cell_id != query_cell:
-                f_inhib += 1
-                continue
+        for mem_id, cell_id in outcome.enforce_forget:
+            # Opt-in (RAVEN_STYLO_ENFORCE=1): recall() mutating state is a
+            # destructive side effect of a read — by default we only alert.
+            self._db.update_state(mem_id, MemoryState.FORGOTTEN)
+            self._active_cells.discard(cell_id)
+            self._kdtree_dirty = True
+            logger.warning(f"Forensic: tampered memory {mem_id[:16]} → FORGOTTEN")
 
-            # Stylometric forensic check (only meaningful for texts of ≥15 words).
-            # The profile is per (author, language), so a bilingual author is
-            # compared only against their own history in the same language —
-            # a language switch simply hits a different profile.
-            if mem.fingerprint and len(mem.content.split()) >= 15:
-                lang = getattr(mem.fingerprint, "language", "und")
-                profile = self._author_profiles.get((mem.author_id, lang))
-                # A single-sample profile is an anecdote, not a baseline:
-                # require STYLO_MIN_SAMPLES before trusting the distance.
-                if profile is not None and profile.count >= STYLO_MIN_SAMPLES:
-                    dist = self.stylometric.compare(mem.fingerprint, profile.mean_fingerprint())
-                    if dist > ESTILOMETRIA_THRESHOLD:
-                        action = "DEGRADED_TO_FORGOTTEN" if STYLO_ENFORCE else "ALERT_ONLY"
-                        if mem.memory_id not in self._alerted_memories:
-                            self._alerted_memories.add(mem.memory_id)
-                            self._db.store_alert(ForensicAlert(
-                                alert_id=f"alert_{int(time.time()*1000)}_{mem.memory_id[:8]}",
-                                timestamp=now,
-                                memory_id=mem.memory_id,
-                                detected_author="UNKNOWN_TAMPERER",
-                                expected_author=mem.author_id,
-                                mismatch_score=dist,
-                                action_taken=action,
-                            ))
-                        if STYLO_ENFORCE:
-                            # Opt-in (RAVEN_STYLO_ENFORCE=1): recall() mutating
-                            # state is a destructive side effect of a read —
-                            # by default we only alert.
-                            self._db.update_state(mem.memory_id, MemoryState.FORGOTTEN)
-                            self._active_cells.discard(mem.cell_id)
-                            self._kdtree_dirty = True
-                            f_estilo += 1
-                            logger.warning(
-                                f"Forensic: tampered memory {mem.memory_id[:16]} → FORGOTTEN (dist={dist:.3f})"
-                            )
-                            continue
-                        logger.warning(
-                            f"Forensic: stylometric mismatch on {mem.memory_id[:16]} "
-                            f"(dist={dist:.3f}) — alert stored, no state change "
-                            f"(set RAVEN_STYLO_ENFORCE=1 to quarantine)"
-                        )
-
-            # Score components
-            sim = float(self._cosine_sim(query_embedding, mem.embedding))
-            state_boost = mem.state.value
-            # Discovery hop recorded during BFS (plan 2.1). Cells that entered
-            # the activated set outside the expansion (rescued REINFORCED) fall
-            # back to the explicit graph search.
-            hop_dist = cell_hops.get(mem.cell_id)
-            if hop_dist is None:
-                hop_dist = self._hop_distance(query_cell, mem.cell_id)
-            hop_decay = math.exp(-HOP_LAMBDA * hop_dist) if hop_dist >= 0 else 1.0
-            resonant_boost = resonant_boosts.get(mem.cell_id, 0.0)
-
-            synaptic_boost = 0.0
-            if current_turn_memories:
-                for act_id in current_turn_memories:
-                    if act_id in mem.synaptic_links:
-                        synaptic_boost += mem.synaptic_links[act_id]
-
-            recency_bonus = 0.0
-            if mem.last_activation > 0:
-                age = now - mem.last_activation
-                recency_bonus = RECENCY_WEIGHT * math.exp(-math.log(2) * age / RECENCY_HALFLIFE)
-
-            # P1-1: resonant contribution scaled by similarity.
-            # Flat additive would let an irrelevant-but-linked memory
-            # outrank a semantically relevant one.
-            resonant_contribution = resonant_boost * min(sim, 1.0)
-            final_score = (
-                sim * state_boost * hop_decay
-                + resonant_contribution
-                + synaptic_boost * SYNAPTIC_SCORE_WEIGHT
-                + recency_bonus
+        for mem_id, dist in outcome.stylo_notices:
+            logger.warning(
+                f"Forensic: stylometric mismatch on {mem_id[:16]} "
+                f"(dist={dist:.3f}) — alert stored, no state change "
+                f"(set RAVEN_STYLO_ENFORCE=1 to quarantine)"
             )
-            # P0: anti-correlated embeddings (sim < 0) could push the final
-            # score negative. Negative magnitudes carry no ranking information
-            # the agent should act on — clamp to the floor of irrelevance.
-            final_score = max(0.0, final_score)
 
-            # ---- Spectral resonance + coherence (epistemic metadata) ----
-            # These do NOT modify final_score; they are reported as audit metadata
-            # so the agent can inspect field-level alignment and graph integrity.
-            spectral_res = 0.0
-            coherence = 1.0
-            if self._spectral is not None and self._spectral.is_built:
-                try:
-                    spectral_res = self._spectral.resonance(query_embedding, mem.embedding)
-                    # Reuse the already-loaded cell_links dict — no extra DB call.
-                    mem_links = all_cell_links.get(mem.cell_id, [])
-                    r_links = sum(1 for _, lt in mem_links if lt == LinkType.RESONANT)
-                    i_links = sum(1 for _, lt in mem_links if lt == LinkType.INHIBITORY)
-                    coherence = SpectralField.coherence(r_links, i_links)
-                except Exception:
-                    pass  # spectral is optional — never crash recall()
-
-            results.append(RecallResult(
-                memory=mem, base_score=sim, state_boost=state_boost,
-                hop_decay=hop_decay, synaptic_boost=synaptic_boost,
-                recency_bonus=recency_bonus, final_score=final_score,
-                hop_distance=hop_dist, cell_id=mem.cell_id, source="similarity",
-                resonance_score=round(spectral_res, 4),
-                coherence_score=round(coherence, 4),
-            ))
-
-        # ---- Synaptic pull (STDP-driven cross-turn association) ----
-        # Batch-load to avoid N+1 queries (was N + N*M individual DB calls).
-        synaptic_count = 0
         if current_turn_memories:
-            existing_ids = {r.memory.memory_id for r in results}
+            self._update_stdp(current_turn_memories, [r.memory.memory_id for r in outcome.top])
 
-            # Batch 1: load all act_mems in one query
-            act_mems_batch = {
-                m.memory_id: m
-                for m in self._db.load_memories_by_ids(current_turn_memories)
-            }
-
-            # Collect all linked_ids that clear the weight filter,
-            # keeping the highest weight when multiple sources point to the same target.
-            link_candidates: Dict[str, float] = {}
-            for act_id in current_turn_memories:
-                act_mem = act_mems_batch.get(act_id)
-                if not act_mem:
-                    continue
-                for linked_id, weight in act_mem.synaptic_links.items():
-                    if weight >= 0.5 and linked_id not in existing_ids:
-                        link_candidates[linked_id] = max(
-                            link_candidates.get(linked_id, 0.0), weight
-                        )
-
-            # Batch 2: load all candidate linked memories in one query
-            if link_candidates:
-                linked_batch = {
-                    m.memory_id: m
-                    for m in self._db.load_memories_by_ids(list(link_candidates.keys()))
-                }
-                for linked_id, weight in link_candidates.items():
-                    linked = linked_batch.get(linked_id)
-                    if not linked or linked.state == MemoryState.FORGOTTEN:
-                        continue
-                    if linked.cell_id in inhibited_cells:
-                        continue
-                    results.append(RecallResult(
-                        memory=linked, base_score=0.0, state_boost=linked.state.value,
-                        hop_decay=1.0, synaptic_boost=weight, recency_bonus=0.0,
-                        final_score=weight * SYNAPTIC_SCORE_WEIGHT, hop_distance=-1,
-                        cell_id=linked.cell_id, source="synaptic",
-                    ))
-                    existing_ids.add(linked_id)
-                    synaptic_count += 1
-
-        results.sort(key=lambda r: r.final_score, reverse=True)
-        top_results = results[:top_k]
-
-        # ---- Update STDP weights ----
-        if current_turn_memories:
-            self._update_stdp(current_turn_memories, [r.memory.memory_id for r in top_results])
-
-        # ---- Update activation timestamps (one transaction, plan 2.3) ----
-        self._db.update_activations([r.memory.memory_id for r in top_results], now)
+        self._db.update_activations([r.memory.memory_id for r in outcome.top], now)
 
         audit = self._build_audit(
-            query_text, query_embedding, activated_cells, top_results,
-            total_cands, f_state, f_estilo, f_inhib, synaptic_count,
+            query_text, query_embedding, outcome.activated_cells, outcome.top,
+            outcome.total_candidates, outcome.f_state, outcome.f_estilo,
+            outcome.f_inhib, outcome.synaptic_count,
         )
         self._db.store_audit(audit)
 
-        return top_results, audit
+        return outcome.top, audit
+
+    # ----------------------------------------------------------
+    # CAUSAL INTERVENTION — read-only probes over the recall core
+    # ----------------------------------------------------------
+
+    def _resolve_targets(self, spec: "InterventionSpec") -> List[Tuple[str, int]]:
+        """
+        memory_id → cell_id, fail-closed.
+
+        What gets sealed is the RESOLVED population, never the selector: a
+        selector's meaning drifts as the field changes, so it does not identify
+        the treatment that was actually applied (docs/INTERVENTION_DESIGN.md §6).
+        """
+        resolved: List[Tuple[str, int]] = []
+        missing: List[str] = []
+        inactive: List[str] = []
+        for mem_id in spec.targets:
+            mem = self._db.load_memory(mem_id)
+            if mem is None:
+                missing.append(mem_id)
+            elif mem.cell_id not in self._active_cells:
+                inactive.append(mem_id)
+            else:
+                resolved.append((mem_id, mem.cell_id))
+        if missing or inactive:
+            raise InterventionError(
+                "intervention targets could not be resolved to live cells "
+                f"(unknown={missing}, inactive={inactive}) — refusing to run a "
+                "probe whose treatment population is not what was requested"
+            )
+        resolved.sort(key=lambda t: t[1])
+        return resolved
+
+    @_synchronized
+    def intervene(
+        self,
+        query_embedding: np.ndarray,
+        spec: "InterventionSpec",
+        query_text: Optional[str] = None,
+        top_k: int = 5,
+        hops: int = 2,
+        layer_filter: Optional[str] = None,
+        current_turn_memories: Optional[List[str]] = None,
+    ) -> "InterventionResult":
+        """
+        Measure the RETRIEVAL causal influence of silencing a set of cells.
+
+        Runs the scoring core twice — baseline and do(suppress) — against ONE
+        field snapshot, under ONE lock acquisition, sharing ONE `now`. Two
+        separate recall() calls would not be comparable: recency_bonus depends
+        on `now`, the first call writes last_activation and STDP weights the
+        second would then read, and a concurrent store could rebuild the index
+        in between (docs/INTERVENTION_DESIGN.md §5).
+
+        The probe writes exactly one row: the sealed audit entry that records
+        that the observation happened. It performs no other persistent write.
+
+        What this measures is the effect on RAVEN's retrieval, not on any
+        downstream agent answer — see docs/INTERVENTION_DESIGN.md §1.
+        """
+        if not isinstance(spec, InterventionSpec):
+            raise InterventionError(
+                f"spec must be an InterventionSpec, got {type(spec).__name__}"
+            )
+        if query_embedding.shape != (self.embedding_dim,):
+            raise ValueError(
+                f"intervene() embedding shape {query_embedding.shape} "
+                f"does not match engine dim ({self.embedding_dim},)"
+            )
+
+        self._ensure_kdtree()
+        resolved = self._resolve_targets(spec)
+        suppressed = frozenset(cell for _, cell in resolved)
+
+        # ONE timestamp, ONE snapshot, both branches.
+        now = time.time()
+        kwargs = dict(
+            now=now, top_k=top_k, hops=hops, layer_filter=layer_filter,
+            current_turn_memories=current_turn_memories,
+        )
+        baseline = self._recall_core(query_embedding, suppressed=frozenset(), **kwargs)
+        perturbed = self._recall_core(query_embedding, suppressed=suppressed, **kwargs)
+
+        delta = _compute_delta(baseline, perturbed, top_k)
+
+        intervention_payload = {
+            "mode": spec.mode,
+            "stage": spec.stage,
+            "targets": [{"memory_id": m, "cell_id": c} for m, c in resolved],
+            "delta": delta,
+            "perturbed": {
+                "cells": sorted(perturbed.activated_cells),
+                "results": self._audit_mem_dicts(perturbed.top),
+            },
+        }
+
+        audit = self._build_audit(
+            query_text, query_embedding, baseline.activated_cells, baseline.top,
+            baseline.total_candidates, baseline.f_state, baseline.f_estilo,
+            baseline.f_inhib, baseline.synaptic_count,
+            operation="recall_intervention",
+            intervention=intervention_payload,
+        )
+        self._db.store_audit(audit)
+
+        return InterventionResult(
+            spec=spec,
+            resolved_targets=resolved,
+            baseline=baseline.top,
+            perturbed=perturbed.top,
+            baseline_scored=baseline.scored,
+            perturbed_scored=perturbed.scored,
+            delta=delta,
+            baseline_exclusions=baseline.exclusions,
+            perturbed_exclusions=perturbed.exclusions,
+            audit=audit,
+        )
+
+    def absence_reason(self, exclusions: Dict[str, str], memory_id: str) -> str:
+        """
+        Why a memory is not in a result set.
+
+        `excluded == True` is not an oracle: direct suppression, inhibition,
+        unreachability and state filtering are causally different mechanisms,
+        and the rescue rule only ever promised protection against the second
+        one (docs/INTERVENTION_DESIGN.md §9).
+        """
+        if memory_id in exclusions:
+            return exclusions[memory_id]
+        mem = self._db.load_memory(memory_id)
+        if mem is None or mem.cell_id not in self._active_cells:
+            return ExclusionReason.NOT_IN_FIELD
+        return ExclusionReason.UNREACHABLE
+
 
     # ----------------------------------------------------------
     # STDP — Long-Term Potentiation + Depression
@@ -1838,20 +2312,11 @@ class AdaptiveMemoryEngine:
     # INTERNAL HELPERS
     # ----------------------------------------------------------
 
-    def _build_audit(
-        self, query_text, query_embedding, cells, results,
-        total_cand, f_state, f_est, f_inhib, synaptic_act,
-    ) -> AuditLog:
-        prev = self._db.get_prev_audit_hash()
-
-        # P0: capture ONE timestamp — it goes both into the hash payload and
-        # the stored row, so the chain is recomputable from persisted data.
-        ts = time.time()
-        cells_sorted = sorted(cells)
-
-        # P0: content_hash travels inside the hashed payload. Modifying a
-        # memory's text after it was audited now breaks hash recomputation.
-        mem_dicts = [
+    @staticmethod
+    def _audit_mem_dicts(results) -> List[Dict]:
+        """Canonical per-result payload — the same shape on both branches of a
+        probe, so a sealed intervention is comparable entry to entry."""
+        return [
             {
                 "memory_id": r.memory.memory_id,
                 "content_hash": r.memory.content_hash,
@@ -1871,6 +2336,22 @@ class AdaptiveMemoryEngine:
             for r in results
         ]
 
+    def _build_audit(
+        self, query_text, query_embedding, cells, results,
+        total_cand, f_state, f_est, f_inhib, synaptic_act,
+        operation: str = "recall", intervention: Optional[Dict] = None,
+    ) -> AuditLog:
+        prev = self._db.get_prev_audit_hash()
+
+        # P0: capture ONE timestamp — it goes both into the hash payload and
+        # the stored row, so the chain is recomputable from persisted data.
+        ts = time.time()
+        cells_sorted = sorted(cells)
+
+        # P0: content_hash travels inside the hashed payload. Modifying a
+        # memory's text after it was audited now breaks hash recomputation.
+        mem_dicts = self._audit_mem_dicts(results)
+
         # P0: .tolist() guard — query_embedding may arrive as ndarray or list.
         # Plan 2.5: only its SHA-256 is persisted (schema v3); the derivation
         # over str(list) is byte-identical to the legacy scheme so the same
@@ -1885,12 +2366,12 @@ class AdaptiveMemoryEngine:
         ).hexdigest()
 
         audit_hash = compute_audit_hash(
-            ts, "recall", query_text, cells_sorted, mem_dicts, prev,
-            qemb_hash=qemb_hash,
+            ts, operation, query_text, cells_sorted, mem_dicts, prev,
+            qemb_hash=qemb_hash, intervention=intervention,
         )
 
         return AuditLog(
-            timestamp=ts, operation="recall", query_text=query_text,
+            timestamp=ts, operation=operation, query_text=query_text,
             query_embedding=None,
             qemb_sha256=qemb_hash,
             cells_activated=cells_sorted,
@@ -1903,6 +2384,7 @@ class AdaptiveMemoryEngine:
             returned_to_agent=len(results),
             audit_hash=audit_hash,
             prev_hash=prev,
+            intervention=intervention,
         )
 
     @staticmethod
