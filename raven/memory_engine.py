@@ -301,6 +301,12 @@ class InterventionSpec:
             raise InterventionError("every target must be a memory_id string")
         if len(set(self.targets)) != len(self.targets):
             raise InterventionError("duplicate targets — the treatment population is ambiguous")
+        # NOTE (red-team finding RT-2, reviewed): an EMPTY targets tuple is
+        # deliberately allowed — it is the null probe. The witness tests use
+        # InterventionSpec.suppress([]) exactly so ("a probe leaves no trace"
+        # needs a treatment guaranteed to do nothing). The cost is a sealed
+        # no-op audit row; the row is honest about what happened, and a null
+        # row is distinguishable by its empty resolved-targets payload.
 
     @classmethod
     def suppress(cls, targets, stage: str = "field") -> "InterventionSpec":

@@ -218,6 +218,19 @@ def fuzz_rescue_rule(
     the result set **via the inhibition path**. Any other exit is legal and is
     recorded separately rather than counted as a violation.
 
+    VACUITY, STATED HONESTLY (red-team finding RT-1): under the current engine
+    semantics `violations` is unreachable, not merely unlikely — the rescue
+    loop discards REINFORCED cells from `inhibited_cells` before any INHIBITED
+    exclusion is written, so the exclusion path this fuzzer counts as a
+    violation can never fire. What this fuzzer genuinely exercises is the
+    legal-exit machinery (UNREACHABLE / STATE_FILTER / LAYER_FILTER /
+    STYLOMETRY exits under random suppression). The violation branch is kept
+    as a tripwire: if the rescue semantics ever change, this fuzzer is the
+    first thing that should scream. Its discriminating power is pinned by a
+    counterfactual test against a stubbed engine (tests/test_fuzz_oracle.py)
+    that proves the wiring WOULD record a violation if an INHIBITED exit for a
+    REINFORCED memory were ever produced.
+
     Returns the violations plus the legal exits, so a run that finds nothing
     still shows what it actually exercised.
     """

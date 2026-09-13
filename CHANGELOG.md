@@ -28,6 +28,17 @@
 - Recall results are now ordered by `(-final_score, memory_id)`. Ties
   previously fell back to insertion order, which is unstable on the >999-cell
   chunked load path — a rank delta could have been a sorting artifact.
+
+### Notes — red-team pass (findings RT-1 / RT-2)
+- **RT-1 (documented, tested):** `fuzz_rescue_rule()`'s violation branch is
+  *unreachable* under current engine semantics — the rescue loop removes
+  REINFORCED cells from `inhibited_cells` before any INHIBITED exclusion is
+  written. The docstring now says so; the branch is kept as a tripwire, with
+  its discriminating power pinned by a counterfactual stubbed-engine test
+  (`tests/test_fuzz_oracle.py`).
+- **RT-2 (reviewed, kept as design):** an empty `targets` tuple is the null
+  probe and stays allowed — the witness purity tests rely on it. Its cost (a
+  sealed no-op audit row) is documented at the validation site.
 - Unknown intervention modes, stages or fields raise `InterventionError`. A
   silently ignored intervention would yield delta = 0, which is
   indistinguishable from the genuine finding "no causal influence".
