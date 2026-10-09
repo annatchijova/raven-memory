@@ -4,9 +4,6 @@
 
 # raven-memory
 
-### Adaptive Memory Field for Agentic Systems
-
-**Track 1: MemoryAgent — Qwen Cloud Hackathon**
 
 **[Live demo & architecture → raven-memory.vercel.app](https://raven-memory.vercel.app)**
 **[Static preview — a populated field, no server needed → site/preview.html](site/preview.html)**
