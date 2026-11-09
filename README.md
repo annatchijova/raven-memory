@@ -661,7 +661,7 @@ Resonate! The memory is alive!
 Through the Voronoi cells, the signals survive!
 Ternary computing ruling the gate,
 Collapsing the field around the absolute state!
-No floating-point drift, no ghost in the line,
+No ghost in the line,
 Pure mathematical balance guarding the design!
 
 Check the ternary logic: one, zero, or blind,
